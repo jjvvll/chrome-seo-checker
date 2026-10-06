@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --border: #e3e6eb; --text: #1c2330; --muted: #6b7587;
+    --accent: #2f5bea; --ok: #1a7f37; --okbg: #e8f6ec; --bad: #c62828; --badbg: #fdecec;
+  }
+  * { box-sizing: border-box; }
+  body { font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; width: 680px; max-height: 590px;
+         margin: 0; background: var(--bg); color: var(--text); overflow-y: auto; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: 1px solid var(--border);
+           padding: 10px 14px; }
+  .top { display: flex; align-items: center; gap: 8px; }
+  h1 { font-size: 14px; margin: 0; flex: 1; }
+  .site { color: var(--muted); font-size: 11px; font-weight: 400; margin-left: 6px; }
+  button { font: inherit; font-weight: 600; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 9px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #status { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  #results { padding: 10px 14px 14px; }
+  .page { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .name { font-weight: 700; }
+  .url { color: var(--accent); font-size: 11px; text-decoration: none; word-break: break-all; flex: 1; }
+  .badge { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--okbg); color: var(--ok); }
+  .badge.bad { background: var(--badbg); color: var(--bad); }
+  .field { display: grid; grid-template-columns: 78px 1fr auto; gap: 8px; padding: 3px 0; align-items: start; }
+  .field .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding-top: 1px; }
+  .field .v.missing { color: var(--bad); font-weight: 600; }
+  .len { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 9px; background: var(--okbg); color: var(--ok); white-space: nowrap; }
+  .len.bad { background: var(--badbg); color: var(--bad); }
+  .page.broken { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
+  .flags { margin-bottom: 4px; }
+  .flag { display: inline-block; font-size: 11px; font-weight: 700; color: var(--bad); background: var(--badbg);
+          padding: 2px 8px; border-radius: 9px; margin-right: 6px; }
+  .src { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 9px; padding: 0 6px; }
+  .redtxt { color: var(--bad); }
+</style>
+</head>
+<body>
+  <header>
+    <div class="top">
+      <h1>Sidemenu SEO Audit <span class="site" id="site"></span></h1>
+      <button id="rerun" disabled>Re-run</button>
+      <button id="copy" class="primary" disabled>Copy all</button>
+    </div>
+    <div class="bar"><div id="fill"></div></div>
+    <div id="status">Starting…</div>
+  </header>
+  <div id="results"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
