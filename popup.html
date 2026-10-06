@@ -8,9 +8,9 @@
     --accent: #2f5bea; --ok: #1a7f37; --okbg: #e8f6ec; --bad: #c62828; --badbg: #fdecec;
   }
   * { box-sizing: border-box; }
-  body { font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; width: 680px; max-height: 590px;
-         margin: 0; background: var(--bg); color: var(--text); overflow-y: auto; }
-  header { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: 1px solid var(--border);
+  body { font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; width: 790px; height: 590px;
+         margin: 0; background: var(--bg); color: var(--text); display: flex; overflow: hidden; }
+  header { flex: none; z-index: 2; background: var(--card); border-bottom: 1px solid var(--border);
            padding: 10px 14px; }
   .top { display: flex; align-items: center; gap: 8px; }
   h1 { font-size: 14px; margin: 0; flex: 1; }
@@ -29,7 +29,26 @@
   .url { color: var(--accent); font-size: 11px; text-decoration: none; word-break: break-all; flex: 1; }
   .badge { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--okbg); color: var(--ok); }
   .badge.bad { background: var(--badbg); color: var(--bad); }
-  .field { display: grid; grid-template-columns: 78px 1fr auto; gap: 8px; padding: 3px 0; align-items: start; }
+  .field { display: grid; grid-template-columns: 150px 1fr auto; gap: 8px; padding: 3px 0; align-items: start; }
+  .field .k { display: flex; align-items: center; }
+  .kl { width: 84px; flex: none; }
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #layout { padding: 10px 14px 14px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  #layout #results { padding: 0; }
+  /* image fills the full right edge, top to bottom, like CrystalDiskInfo */
+  #pic { flex: none; width: 250px; position: relative; overflow: hidden; background: var(--bg); }
+  #pic[hidden] { display: none; }
+  #picimg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
+  #picbar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: flex-end; gap: 8px;
+            padding: 22px 10px 8px; background: linear-gradient(transparent, rgba(0,0,0,.55)); color: #fff; font-size: 11px; line-height: 1.3; }
+  #piccredit { flex: 1; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  #piccredit a { color: #fff; }
+  #picroll { padding: 3px 8px; background: rgba(255,255,255,.85); }
+  .rerun1 { padding: 0 7px; font-size: 13px; line-height: 20px; color: var(--accent); }
+  .rerun1.spin { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .qcopy { font-size: 10px; padding: 0 6px; margin-left: 6px; min-width: 56px; text-transform: none; letter-spacing: 0; color: var(--accent); }
+  .qcopy.done { color: var(--ok); border-color: var(--ok); }
   .field .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding-top: 1px; }
   .field .v.missing { color: var(--bad); font-weight: 600; }
   .len { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 9px; background: var(--okbg); color: var(--ok); white-space: nowrap; }
@@ -43,16 +62,27 @@
 </style>
 </head>
 <body>
-  <header>
-    <div class="top">
-      <h1>Sidemenu SEO Audit <span class="site" id="site"></span></h1>
-      <button id="rerun" disabled>Re-run</button>
-      <button id="copy" class="primary" disabled>Copy all</button>
+  <main id="main">
+    <header>
+      <div class="top">
+        <h1>Sidemenu SEO Audit <span class="site" id="site"></span></h1>
+        <button id="rerun" disabled>Re-run</button>
+        <button id="copy" class="primary" disabled>Copy all</button>
+      </div>
+      <div class="bar"><div id="fill"></div></div>
+      <div id="status">Starting…</div>
+    </header>
+    <div id="layout">
+      <div id="results"></div>
     </div>
-    <div class="bar"><div id="fill"></div></div>
-    <div id="status">Starting…</div>
-  </header>
-  <div id="results"></div>
+  </main>
+  <aside id="pic" hidden>
+    <img id="picimg" alt="">
+    <div id="picbar">
+      <div id="piccredit"></div>
+      <button id="picroll" title="New random image">🎲</button>
+    </div>
+  </aside>
   <script src="popup.js"></script>
 </body>
 </html>
