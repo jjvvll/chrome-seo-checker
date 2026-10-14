@@ -4,85 +4,276 @@
 <meta charset="utf-8">
 <style>
   :root {
-    --bg: #f6f7f9; --card: #fff; --border: #e3e6eb; --text: #1c2330; --muted: #6b7587;
-    --accent: #2f5bea; --ok: #1a7f37; --okbg: #e8f6ec; --bad: #c62828; --badbg: #fdecec;
+    --bg: #f4f5f8; --card: #ffffff; --line: #e8eaf0; --text: #1b2130; --muted: #7a8396;
+    --accent: #3b5bdb; --accent-soft: #edf1ff;
+    --ok: #168a4a; --ok-soft: #e6f6ed; --bad: #d03a3a; --bad-soft: #fdeded; --warn-soft: #fff4e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --card: #1a1e28; --line: #2a2f3d; --text: #e6e9f0; --muted: #8b94a8;
+      --accent: #7c93ff; --accent-soft: #232a45;
+      --ok: #4cc58a; --ok-soft: #173326; --bad: #ff7b7b; --bad-soft: #3a1c1f; --warn-soft: #3a2d14;
+    }
   }
   * { box-sizing: border-box; }
-  body { font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; width: 790px; height: 590px;
+  body { font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; width: 800px; height: 600px;
          margin: 0; background: var(--bg); color: var(--text); display: flex; overflow: hidden; }
-  header { flex: none; z-index: 2; background: var(--card); border-bottom: 1px solid var(--border);
-           padding: 10px 14px; }
-  .top { display: flex; align-items: center; gap: 8px; }
-  h1 { font-size: 14px; margin: 0; flex: 1; }
-  .site { color: var(--muted); font-size: 11px; font-weight: 400; margin-left: 6px; }
-  button { font: inherit; font-weight: 600; padding: 6px 12px; border-radius: 6px; cursor: pointer;
-           border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  button { font: inherit; font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 7px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button:disabled { opacity: .45; cursor: default; }
-  .bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 9px; overflow: hidden; }
-  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
-  #status { color: var(--muted); font-size: 12px; margin-top: 6px; }
-  #results { padding: 10px 14px 14px; }
-  .page { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
-  .head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
-  .name { font-weight: 700; }
-  .url { color: var(--accent); font-size: 11px; text-decoration: none; word-break: break-all; flex: 1; }
-  .badge { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--okbg); color: var(--ok); }
-  .badge.bad { background: var(--badbg); color: var(--bad); }
-  .field { display: grid; grid-template-columns: 150px 1fr auto; gap: 8px; padding: 3px 0; align-items: start; }
-  .field .k { display: flex; align-items: center; }
-  .kl { width: 84px; flex: none; }
+  button.primary:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
+  button:disabled { opacity: .4; cursor: default; }
+  button[hidden] { display: none; }
+
+  /* ---------- header ---------- */
   #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  #layout { padding: 10px 14px 14px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-  #layout #results { padding: 0; }
-  /* image fills the full right edge, top to bottom, like CrystalDiskInfo */
-  #pic { flex: none; width: 250px; position: relative; overflow: hidden; background: var(--bg); }
-  #pic[hidden] { display: none; }
-  #picimg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
-  #picbar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: flex-end; gap: 8px;
-            padding: 22px 10px 8px; background: linear-gradient(transparent, rgba(0,0,0,.55)); color: #fff; font-size: 11px; line-height: 1.3; }
-  #piccredit { flex: 1; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
-  #piccredit a { color: #fff; }
-  #picroll { padding: 3px 8px; background: rgba(255,255,255,.85); }
-  .rerun1 { padding: 0 7px; font-size: 13px; line-height: 20px; color: var(--accent); }
+  header { flex: none; background: var(--card); border-bottom: 1px solid var(--line); padding: 12px 16px 10px; }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .titles { flex: 1; min-width: 0; }
+  h1 { font-size: 15px; font-weight: 700; margin: 0; line-height: 1.2; }
+  .site { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 10px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #status { margin-top: 8px; color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 22px; }
+  .stat { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); }
+  .stat.bad { background: var(--bad-soft); color: var(--bad); }
+  .stat.neutral { background: var(--accent-soft); color: var(--accent); }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .toolbar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toolbar .grow { flex: 1; }
+  select { font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; cursor: pointer; }
+
+  #findtoggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  #finder { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  #finder[hidden] { display: none; }
+  .frow { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .frow label { display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+  #fq { flex: 1; min-width: 0; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+  #fq:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #fsum { margin-top: 7px; font-size: 12px; color: var(--muted); min-height: 16px; }
+  #fres { max-height: 150px; overflow-y: auto; margin-top: 4px; }
+  .fhit { padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+  .fhit:hover { background: var(--accent-soft); }
+  .fpath { color: var(--accent); font-size: 11px; margin: 0 4px; }
+  .ftag { font-size: 10px; font-weight: 700; padding: 1px 7px; margin-right: 4px; border-radius: 999px; text-transform: lowercase; }
+  .ftag.seo { background: var(--ok-soft); color: var(--ok); }
+  .ftag.body { background: var(--accent-soft); color: var(--accent); }
+  .fsnip { font-size: 11.5px; color: var(--muted); margin-top: 2px; word-break: break-word; }
+  mark { background: #ffe58a; color: #1b2130; border-radius: 3px; padding: 0 2px; }
+  .page.flash { animation: flash 1.2s ease; }
+  @keyframes flash { 0%, 60% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+  /* ---------- results ---------- */
+  #layout { padding: 12px 16px 16px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  #layout::-webkit-scrollbar { width: 8px; }
+  #layout::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  .page { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px 10px; margin-bottom: 10px; position: relative; }
+  .page.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .page.broken { border-left: 3px solid var(--bad); }
+  .head { display: flex; align-items: center; gap: 9px; }
+  .ttl { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; }
+  .name { font-weight: 700; font-size: 13.5px; white-space: nowrap; }
+  .src { font-size: 10px; font-weight: 600; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+  .badge { font-size: 11px; font-weight: 700; padding: 1px 9px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); }
+  .badge.bad { background: var(--bad-soft); color: var(--bad); }
+  .rerun1 { padding: 1px 8px; font-size: 13px; line-height: 20px; border-radius: 7px; color: var(--muted); }
   .rerun1.spin { animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .qcopy { font-size: 10px; padding: 0 6px; margin-left: 6px; min-width: 56px; text-transform: none; letter-spacing: 0; color: var(--accent); }
+  .url { display: block; margin: 1px 0 8px 23px; color: var(--accent); font-size: 11px; text-decoration: none;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .85; }
+  .url:hover { text-decoration: underline; opacity: 1; }
+
+  .flags { margin: 0 0 8px 23px; display: flex; flex-wrap: wrap; gap: 5px; }
+  .flag { font-size: 11px; font-weight: 600; color: var(--bad); background: var(--bad-soft); padding: 2px 9px; border-radius: 999px; }
+  .field { display: grid; grid-template-columns: 150px 1fr auto; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); align-items: start; margin-left: 0; }
+  .field .k { display: flex; align-items: center; color: var(--muted); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .kl { width: 82px; flex: none; }
+  .qcopy { font-size: 10px; font-weight: 600; padding: 1px 8px; min-width: 52px; border-radius: 6px; text-transform: none; letter-spacing: 0;
+           background: transparent; color: var(--accent); }
   .qcopy.done { color: var(--ok); border-color: var(--ok); }
-  .field .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding-top: 1px; }
-  .field .v.missing { color: var(--bad); font-weight: 600; }
-  .len { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 9px; background: var(--okbg); color: var(--ok); white-space: nowrap; }
-  .len.bad { background: var(--badbg); color: var(--bad); }
-  .page.broken { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
-  .flags { margin-bottom: 4px; }
-  .flag { display: inline-block; font-size: 11px; font-weight: 700; color: var(--bad); background: var(--badbg);
-          padding: 2px 8px; border-radius: 9px; margin-right: 6px; }
-  .src { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 9px; padding: 0 6px; }
-  .redtxt { color: var(--bad); }
+  .field .v { word-break: break-word; }
+  .field .v.missing { color: var(--bad); font-weight: 700; }
+  .len { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); white-space: nowrap; }
+  .len.bad { background: var(--bad-soft); color: var(--bad); }
+
+  .page.hdr .snip { display: block; margin: 3px 0 8px; font: 11px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); word-break: break-all; }
+  .okline { color: var(--ok); font-weight: 600; font-size: 12px; margin-top: 6px; }
+  .okline.muted { color: var(--muted); }
+
+  /* ---------- image panel: fills the right edge ---------- */
+  #pic { flex: none; width: 250px; position: relative; overflow: hidden; background: #e9ebf0; }
+  #picimg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top center; cursor: zoom-in; }
+  #picimg:not([src]) { display: none; }
+  #picmsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+            padding: 20px; color: #7a8396; font-size: 12px; pointer-events: none; }
+  #picmsg.over { inset: auto 0 44px 0; padding: 6px 10px; background: rgba(208,58,58,.92); color: #fff; }
+  #pickw { position: absolute; left: 0; right: 0; top: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 24px;
+           background: linear-gradient(rgba(0,0,0,.55) 60%, transparent); }
+  .kwrow { display: flex; gap: 4px; }
+  #kw { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 7px; border: 0; font: inherit; font-size: 12px; background: rgba(255,255,255,.95); color: #1b2130; }
+  #picroll, #kwadd { padding: 3px 9px; background: rgba(255,255,255,.95); color: #1b2130; border: 0; }
+  #chips { display: flex; flex-wrap: wrap; gap: 4px; max-height: 84px; overflow-y: auto; }
+  .chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 1px 4px 1px 9px; border-radius: 999px; cursor: pointer;
+          background: rgba(255,255,255,.22); color: #fff; border: 1px solid rgba(255,255,255,.45); user-select: none; }
+  .chip.on { background: var(--accent); border-color: #fff; }
+  .chip .x { padding: 0 4px; opacity: .75; }
+  .chip .x:hover { opacity: 1; }
+  #picbar { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 12px 10px; pointer-events: none;
+            background: linear-gradient(transparent, rgba(0,0,0,.6)); color: #fff; font-size: 11px; line-height: 1.35; }
+  #piccredit { text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  #piccredit a { color: #fff; pointer-events: auto; }
+  #piccredit .pnone { display: block; font-size: 10px; opacity: .7; margin-bottom: 2px; }
+  #piccredit .pserie { display: block; font-size: 14px; font-weight: 700; line-height: 1.25; margin-bottom: 3px; }
+
+  /* ---------- larger window (⤢ Expand) ---------- */
+  body.full { width: 100vw; height: 100vh; font-size: 14px; }
+  body.full #pic { width: 380px; }
+  body.full #layout { padding: 16px 22px; }
+  body.full header { padding: 14px 22px 12px; }
+
+  /* ---------- settings (API keys) ---------- */
+  #settings { position: fixed; inset: 0; z-index: 15; background: rgba(10,12,18,.45); display: flex; align-items: center; justify-content: center; }
+  #settings[hidden] { display: none; }
+  .scard { width: 420px; max-height: 92vh; overflow-y: auto; background: var(--card); color: var(--text); border-radius: 12px; padding: 16px 18px;
+           box-shadow: 0 12px 40px rgba(0,0,0,.3); font-size: 13px; }
+  .shead { display: flex; align-items: center; justify-content: space-between; font-size: 15px; }
+  .shead button { padding: 2px 9px; }
+  .shint { color: var(--muted); font-size: 12px; margin: 6px 0 4px; }
+  .scard label { display: block; font-weight: 600; font-size: 12px; margin: 12px 0 5px; }
+  .scard select, .scard input { width: 100%; font: inherit; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .srow { display: flex; gap: 6px; }
+  .srow input { flex: 1; min-width: 0; }
+  .seye { padding: 4px 9px; }
+  .sactions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+  .sactions .grow { flex: 1; }
+  #smsg { font-size: 12px; font-weight: 600; }
+  #smsg.ok { color: var(--ok); }
+  #smsg.bad { color: var(--bad); }
+  #settingsbtn.nokey { border-color: var(--bad); color: var(--bad); }
+
+  /* ---------- lightbox ---------- */
+  #lightbox { position: fixed; inset: 0; z-index: 20; background: rgba(10,12,18,.93); display: flex; flex-direction: column; }
+  #lightbox[hidden] { display: none; }
+  .lbbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px; color: #cfd5e3; font-size: 12px; }
+  .lbbar .grow { flex: 1; }
+  .lbbar a { color: #fff; font-weight: 600; text-decoration: none; padding: 5px 12px; border: 1px solid #fff4; border-radius: 7px; }
+  #lbimg { flex: 1; min-height: 0; width: 100%; object-fit: contain; padding: 0 14px 14px; }
 </style>
 </head>
 <body>
   <main id="main">
     <header>
       <div class="top">
-        <h1>Sidemenu SEO Audit <span class="site" id="site"></span></h1>
-        <button id="rerun" disabled>Re-run</button>
+        <div class="titles">
+          <h1>Sidemenu SEO Audit</h1>
+          <div class="site" id="site"></div>
+        </div>
+        <button id="settingsbtn" title="AI rewrite settings (API keys)">⚙</button>
+        <button id="expand" title="Open in a larger window">⤢ Expand</button>
+        <button id="rerun" disabled>↻ Re-run</button>
         <button id="copy" class="primary" disabled>Copy all</button>
       </div>
       <div class="bar"><div id="fill"></div></div>
       <div id="status">Starting…</div>
+      <div class="toolbar">
+        <label><input type="checkbox" id="selall" disabled> Select all</label>
+        <button id="findtoggle" title="Search a word across every audited page">🔍 Find on site</button>
+        <span class="grow"></span>
+        <label>Copy
+          <select id="fmt">
+            <option value="both">titles + descriptions</option>
+            <option value="title">titles only</option>
+            <option value="desc">descriptions only</option>
+          </select>
+        </label>
+        <button id="copysel" disabled>Copy selected (0)</button>
+      </div>
+      <div id="finder" hidden>
+        <div class="frow">
+          <input id="fq" placeholder="Search a word or phrase on every audited page…" autocomplete="off">
+          <select id="fscope" title="Where to look">
+            <option value="all">Everything</option>
+            <option value="body">Page text only</option>
+            <option value="seo">Title &amp; description only</option>
+          </select>
+          <label title="Match case"><input type="checkbox" id="fcase"> Aa</label>
+          <label title="Whole word only"><input type="checkbox" id="fword"> Whole word</label>
+        </div>
+        <div id="fsum"></div>
+        <div id="fres"></div>
+      </div>
     </header>
     <div id="layout">
       <div id="results"></div>
     </div>
   </main>
-  <aside id="pic" hidden>
-    <img id="picimg" alt="">
-    <div id="picbar">
-      <div id="piccredit"></div>
-      <button id="picroll" title="New random image">🎲</button>
+  <aside id="pic">
+    <img id="picimg" alt="" title="Click to enlarge">
+    <div id="picmsg">Loading image…</div>
+    <div id="pickw">
+      <div class="kwrow">
+        <input id="kw" list="tagopts" placeholder="Series / character…" title="Type a series or character, e.g. genshin impact. Enter or ＋ saves it permanently." autocomplete="off">
+        <button id="kwadd" title="Save keyword">＋</button>
+        <button id="picroll" title="New image">🎲</button>
+      </div>
+      <div id="chips" title="Click a keyword to turn it on or off. Images are picked from the ones that are on."></div>
+      <datalist id="tagopts"></datalist>
     </div>
+    <div id="picbar"><div id="piccredit"></div></div>
   </aside>
+
+  <div id="settings" hidden>
+    <div class="scard">
+      <div class="shead"><b>AI rewrite settings</b><button id="sclose" title="Close">✕</button></div>
+      <p class="shint">Used by the right-click <b>Rewrite with AI</b> menu (fix grammar / formal / polite). Keys are stored only in this browser.</p>
+
+      <label for="sprovider">Provider</label>
+      <select id="sprovider">
+        <option value="gemini">Google Gemini (free tier)</option>
+        <option value="claude">Anthropic Claude (paid)</option>
+      </select>
+
+      <div id="sgemini">
+        <label for="sgkey">Gemini API key</label>
+        <div class="srow"><input id="sgkey" type="password" autocomplete="off" placeholder="Paste your key from aistudio.google.com"><button class="seye" data-for="sgkey" title="Show / hide">👁</button></div>
+        <label for="sgmodel">Model</label>
+        <select id="sgmodel">
+          <option value="gemini-flash-lite-latest">Gemini Flash-Lite (fast, ~1 s)</option>
+          <option value="gemini-flash-latest">Gemini Flash (better, slower)</option>
+        </select>
+      </div>
+
+      <div id="sclaude" hidden>
+        <label for="sckey">Claude API key</label>
+        <div class="srow"><input id="sckey" type="password" autocomplete="off" placeholder="sk-ant-…"><button class="seye" data-for="sckey" title="Show / hide">👁</button></div>
+        <label for="scmodel">Model</label>
+        <select id="scmodel">
+          <option value="claude-opus-5-5">Claude Opus 5.5 (default)</option>
+          <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
+          <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
+        </select>
+      </div>
+
+      <div class="sactions">
+        <button id="stest">Test key</button>
+        <span id="smsg"></span>
+        <span class="grow"></span>
+        <button id="ssave" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="lightbox" hidden>
+    <div class="lbbar">
+      <span class="grow" id="lbnote"></span>
+      <a id="lbopen" href="#" target="_blank">Open original</a>
+      <button id="lbsave" class="primary">⬇ Save</button>
+      <button id="lbclose">✕ Close</button>
+    </div>
+    <img id="lbimg" alt="">
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

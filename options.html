@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Rewrite settings</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 520px; margin: 32px auto; padding: 0 16px; color: #1b2130; }
+  h1 { font-size: 18px; }
+  h2 { font-size: 15px; margin: 26px 0 0; padding-top: 14px; border-top: 1px solid #e3e6eb; }
+  label { display: block; font-weight: 600; margin: 14px 0 6px; }
+  input, select { width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px; border: 1px solid #d6d9e0; border-radius: 8px; }
+  .hint { color: #6b7587; font-size: 12px; margin-top: 4px; }
+  .off { opacity: .45; }
+  button { margin-top: 22px; font: 600 14px system-ui, sans-serif; padding: 8px 18px; border-radius: 8px; border: 0; background: #3b5bdb; color: #fff; cursor: pointer; }
+  #saved { margin-left: 10px; color: #168a4a; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>Rewrite (grammar fix)</h1>
+  <p>Highlight text on any page, right-click, choose <b>Rewrite with AI</b> and pick a style.</p>
+
+  <label for="provider">AI provider</label>
+  <select id="provider">
+    <option value="gemini">Google Gemini (free tier)</option>
+    <option value="claude">Anthropic Claude (paid)</option>
+  </select>
+
+  <section id="gemini">
+    <h2>Google Gemini</h2>
+    <label for="gkey">Gemini API key</label>
+    <input id="gkey" type="password" autocomplete="off" placeholder="Paste your key from aistudio.google.com">
+    <div class="hint">Stored only in this browser. On the free tier Google may use what you send to improve its products, so avoid rewriting sensitive text.</div>
+    <label for="gmodel">Model</label>
+    <select id="gmodel">
+      <option value="gemini-flash-lite-latest">Gemini Flash-Lite (fast, ~1 second)</option>
+      <option value="gemini-flash-latest">Gemini Flash (higher quality, slower)</option>
+    </select>
+  </section>
+
+  <section id="claude">
+    <h2>Anthropic Claude</h2>
+    <label for="key">Claude API key</label>
+    <input id="key" type="password" autocomplete="off" placeholder="sk-ant-…">
+    <div class="hint">Stored only in this browser. Get a key at console.anthropic.com; usage is billed to your account.</div>
+    <label for="model">Model</label>
+    <select id="model">
+      <option value="claude-opus-5-5">Claude Opus 5.5 (default)</option>
+      <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
+      <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
+    </select>
+  </section>
+
+  <button id="save">Save</button><span id="saved"></span>
+  <script src="options.js"></script>
+</body>
+</html>
