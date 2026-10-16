@@ -39,30 +39,69 @@
   .stat { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); }
   .stat.bad { background: var(--bad-soft); color: var(--bad); }
   .stat.neutral { background: var(--accent-soft); color: var(--accent); }
-  .toolbar { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--muted); }
-  .toolbar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .toolbar label, .toolbar button { display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
   .toolbar .grow { flex: 1; }
   select { font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
   input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; cursor: pointer; }
 
-  #findtoggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-  #finder { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .tabs { display: flex; gap: 4px; margin-top: 10px; border-bottom: 1px solid var(--line); }
+  .tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 12px; color: var(--muted); font-size: 12.5px; }
+  .tab:hover:not(:disabled) { color: var(--text); border-color: transparent; border-bottom-color: var(--line); }
+  .tab.on, .tab.on:hover:not(:disabled) { color: var(--accent); border-bottom-color: var(--accent); }
+  [data-pane][hidden] { display: none !important; }
+  .fmore-btn { margin: 6px 0 2px; font-size: 11px; padding: 3px 10px; }
+  #finder { margin-top: 10px; }
   #finder[hidden] { display: none; }
-  .frow { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .frow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 12px; color: var(--muted); }
   .frow label { display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
-  #fq { flex: 1; min-width: 0; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+  #fq { flex: 1 1 100%; min-width: 0; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
   #fq:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   #fsum { margin-top: 7px; font-size: 12px; color: var(--muted); min-height: 16px; }
-  #fres { max-height: 150px; overflow-y: auto; margin-top: 4px; }
-  .fhit { padding: 6px 8px; border-radius: 7px; cursor: pointer; }
-  .fhit:hover { background: var(--accent-soft); }
+  #fres { margin-top: 0; }
+  #fres .fhit.shared { border-left: 3px solid #7a3fb0; }
+  #fres .fhit { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .fhit { padding: 6px 8px; border-radius: 7px; }
+  .fh { cursor: pointer; }
+  .fh:hover b { color: var(--accent); text-decoration: underline; }
+
   .fpath { color: var(--accent); font-size: 11px; margin: 0 4px; }
   .ftag { font-size: 10px; font-weight: 700; padding: 1px 7px; margin-right: 4px; border-radius: 999px; text-transform: lowercase; }
   .ftag.seo { background: var(--ok-soft); color: var(--ok); }
   .ftag.body { background: var(--accent-soft); color: var(--accent); }
+  .fwhere { font-weight: 700; color: var(--text); font-size: 11.5px; }
+  .fsec { font-weight: 700; font-size: 11px; color: #7a3fb0; background: #f3eafc; padding: 0 7px; border-radius: 4px; }
+  .fhead { font-size: 11px; font-style: italic; }
+  .fitem { margin-top: 5px; font-size: 11.5px; color: var(--muted); }
+  .fel { font: 11px/1.3 ui-monospace, Consolas, monospace; color: var(--accent); background: var(--accent-soft); padding: 0 5px; border-radius: 4px; word-break: break-all; }
+  .fcount { font-weight: 700; }
+  .fopen { color: var(--accent); text-decoration: none; font-weight: 700; padding: 0 4px; }
+  .fitem .fsnip { margin: 1px 0 0 10px; }
+  .seobadge { font-size: 11px; font-weight: 800; padding: 1px 9px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); white-space: nowrap; }
+  .seobadge.bad { background: var(--bad); color: #fff; }
+  .seoflags { margin: 0 0 8px 23px; display: flex; flex-wrap: wrap; gap: 5px; }
+  .seoflag { font-size: 11.5px; font-weight: 700; color: #fff; background: var(--bad); padding: 2px 10px; border-radius: 6px; }
   .fsnip { font-size: 11.5px; color: var(--muted); margin-top: 2px; word-break: break-word; }
   mark { background: #ffe58a; color: #1b2130; border-radius: 3px; padding: 0 2px; }
   .page.flash { animation: flash 1.2s ease; }
+  .grouph { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 2px 8px; }
+  .grouph:first-of-type { margin-top: 4px; }
+  .dynstatus { color: var(--muted); font-size: 12.5px; padding: 18px 4px; }
+  #tplbtn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  #tplbox { flex: 1 1 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  #tplbox[hidden] { display: none; }
+  .tplhead { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 12px; margin-bottom: 6px; }
+  .tplhead b { flex: 1; }
+  #tplsaved { color: var(--ok); font-weight: 600; font-size: 11px; }
+  #tplreset { padding: 2px 9px; font-size: 11px; }
+  #tpltext { width: 100%; box-sizing: border-box; font: 12px/1.45 system-ui, sans-serif; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); resize: vertical; }
+  .tplhint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .panebar { display: flex; align-items: center; gap: 10px; margin: 0 2px 10px; }
+  .pbtitle { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .pbtime { flex: 1; font-size: 11px; color: var(--muted); }
+  .pbrefresh { padding: 3px 10px; font-size: 11.5px; }
+  .pbrefresh:disabled { opacity: .5; }
+  .tab[hidden] { display: none; }
   @keyframes flash { 0%, 60% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 
   /* ---------- results ---------- */
@@ -172,14 +211,21 @@
         </div>
         <button id="settingsbtn" title="AI rewrite settings (API keys)">⚙</button>
         <button id="expand" title="Open in a larger window">⤢ Expand</button>
-        <button id="rerun" disabled>↻ Re-run</button>
+        <button id="rerun" disabled title="Re-audit everything: the main pages and any Neighborhoods / Agents tabs that are on">↻ Re-run all</button>
         <button id="copy" class="primary" disabled>Copy all</button>
       </div>
       <div class="bar"><div id="fill"></div></div>
       <div id="status">Starting…</div>
-      <div class="toolbar">
+      <div class="tabs" role="tablist">
+        <button class="tab on" data-tab="seo" role="tab">📋 SEO audit</button>
+        <button class="tab" data-tab="nbh" role="tab" hidden>🏘 Neighborhoods</button>
+        <button class="tab" data-tab="agent" role="tab" hidden>👤 Agents</button>
+        <button class="tab" data-tab="search" role="tab">🔍 Keyword search</button>
+      </div>
+      <div class="toolbar" data-pane="seo nbh agent">
         <label><input type="checkbox" id="selall" disabled> Select all</label>
-        <button id="findtoggle" title="Search a word across every audited page">🔍 Find on site</button>
+        <label title="Audit every neighborhood detail page (all pagination pages, via the sitemap) in its own tab"><input type="checkbox" id="tog-nbh" disabled> Neighborhoods</label>
+        <label title="Audit every agent detail page (via the sitemap) in its own tab"><input type="checkbox" id="tog-agent" disabled> Agents</label>
         <span class="grow"></span>
         <label>Copy
           <select id="fmt">
@@ -188,25 +234,37 @@
             <option value="desc">descriptions only</option>
           </select>
         </label>
-        <button id="copysel" disabled>Copy selected (0)</button>
+        <button id="copysel" disabled title="Copies the ticked pages, then your template text">Copy selected (0)</button>
+        <button id="tplbtn" title="Edit the text added after Copy selected">✎ Text</button>
+        <div id="tplbox" hidden>
+          <div class="tplhead"><b>Text added after “Copy selected”</b><span id="tplsaved"></span><button id="tplreset" title="Restore the original analysis prompt">Reset</button></div>
+          <textarea id="tpltext" rows="4" spellcheck="true" placeholder="Leave empty to copy only the SEO"></textarea>
+          <div class="tplhint">Saved automatically, kept until you change it. Copy all copies only the SEO.</div>
+        </div>
       </div>
-      <div id="finder" hidden>
+      <div id="finder" data-pane="search" hidden>
         <div class="frow">
           <input id="fq" placeholder="Search a word or phrase on every audited page…" autocomplete="off">
           <select id="fscope" title="Where to look">
             <option value="all">Everything</option>
-            <option value="body">Page text only</option>
-            <option value="seo">Title &amp; description only</option>
+            <option value="body">Page content only (no title/description/meta)</option>
+            <option value="seo">SEO only (title, description, meta tags)</option>
           </select>
           <label title="Match case"><input type="checkbox" id="fcase"> Aa</label>
           <label title="Whole word only"><input type="checkbox" id="fword"> Whole word</label>
+          <label title="Also search things that are not visible text: image alt text, title/aria attributes, placeholders, link URLs, meta tags, and loose text outside text elements"><input type="checkbox" id="fall"> Search everything</label>
         </div>
         <div id="fsum"></div>
-        <div id="fres"></div>
       </div>
     </header>
     <div id="layout">
-      <div id="results"></div>
+      <div class="panebar" data-pane="seo"><span class="pbtitle">Menu, navbar &amp; footer pages</span><span class="pbtime" id="pt-seo"></span><button class="pbrefresh" data-refresh="seo" disabled title="Re-audit only the pages on this tab">↻ Refresh</button></div>
+      <div id="results" data-pane="seo"></div>
+      <div class="panebar" data-pane="nbh" hidden><span class="pbtitle">Neighborhood pages</span><span class="pbtime" id="pt-nbh"></span><button class="pbrefresh" data-refresh="nbh" title="Re-read the sitemap and re-audit only the neighborhood pages">↻ Refresh</button></div>
+      <div id="res-nbh" data-pane="nbh" hidden></div>
+      <div class="panebar" data-pane="agent" hidden><span class="pbtitle">Agent pages</span><span class="pbtime" id="pt-agent"></span><button class="pbrefresh" data-refresh="agent" title="Re-read the sitemap and re-audit only the agent pages">↻ Refresh</button></div>
+      <div id="res-agent" data-pane="agent" hidden></div>
+      <div id="fres" data-pane="search" hidden></div>
     </div>
   </main>
   <aside id="pic">

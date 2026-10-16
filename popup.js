@@ -11,9 +11,73 @@ const TARGET_TAB = +new URLSearchParams(location.search).get('tab') || null;
 if (TARGET_TAB) { document.body.classList.add('full'); $('expand').hidden = true; }
 $('expand').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  await chrome.windows.create({ url: chrome.runtime.getURL('popup.html') + '?tab=' + tab.id, type: 'popup', width: 1280, height: 860 });
+  // Hand the finished results to the larger window so it doesn't re-audit everything.
+  // chrome.storage.session is memory-only; the new window deletes the entry as soon as it reads it.
+  let key = '';
+  if (rows.length && !mainBusy) {
+    key = 'handoff-' + Date.now();
+    try { await chrome.storage.session.set({ [key]: snapshotState() }); } catch { key = ''; }
+  }
+  await chrome.windows.create({
+    url: chrome.runtime.getURL('popup.html') + '?tab=' + tab.id + (key ? '&state=' + key : ''),
+    type: 'popup', width: 1280, height: 860
+  });
   window.close();
 });
+
+function snapshotState() {
+  const stamp = t => document.getElementById('pt-' + t)?.textContent || '';
+  return {
+    rows, live, siteOrigin, activeTab,
+    selected: [...selected],
+    stamps: { seo: stamp('seo'), nbh: stamp('nbh'), agent: stamp('agent') },
+    groups: Object.fromEntries(Object.entries(dyn).map(([k, g]) => [k, { on: g.on, rows: g.rows }]))
+  };
+}
+
+// In the Expand window: show the handed-over results instead of auditing again.
+async function restoreState(key) {
+  let s;
+  try {
+    s = (await chrome.storage.session.get(key))[key];
+    await chrome.storage.session.remove(key);
+  } catch { /* fall through */ }
+  if (!s || !s.rows?.length) return false;
+
+  rows = s.rows;
+  live = s.live;
+  siteOrigin = s.siteOrigin;
+  s.selected.forEach(u => selected.add(u));
+  $('site').textContent = new URL(siteOrigin).host;
+  resultsEl.innerHTML = '';
+  renderHeaderCard();
+  rows.forEach(r => render(r));
+  fillEl.style.width = '100%';
+  copyBtn.disabled = rerunBtn.disabled = $('selall').disabled = paneBtn('seo').disabled = false;
+
+  for (const [k, g] of Object.entries(dyn)) {
+    const saved = s.groups?.[k];
+    g.toggle.disabled = false;
+    if (!saved?.on) continue;
+    g.on = true;
+    g.toggle.checked = true;
+    tabButton(g).hidden = false;
+    if (saved.rows.length) {
+      g.rows = saved.rows;
+      g.el.innerHTML = '';
+      g.rows.forEach(r => render(r, g.el));
+      tabButton(g).textContent = `${g.label} (${g.rows.length})`;
+    } else {
+      auditGroup(k);   // it was still auditing when Expand was clicked
+    }
+  }
+  Object.entries(s.stamps || {}).forEach(([t, txt]) => { const el = document.getElementById('pt-' + t); if (el && txt) el.textContent = txt; });
+
+  showTab(s.activeTab && document.querySelector(`.tab[data-tab="${s.activeTab}"]:not([hidden])`) ? s.activeTab : 'seo');
+  updateSummary();
+  updateSelection();
+  return true;
+}
 
 // ---------- runs inside the page (must be self-contained) ----------
 function extractLinks() {
@@ -141,7 +205,7 @@ function checkContactLinks(items) {
 
 async function audit(link, probeTitle) {
   const row = { url: link.href, label: link.text, source: link.source, probe: !!link.probe,
-                status: null, title: '', description: '', text: '', error: '', flags: [] };
+                status: null, title: '', description: '', parts: [], error: '', flags: [] };
   try {
     // Always hit the network: no HTTP cache, nothing stored by the extension.
     const res = await fetch(link.href, {
@@ -164,7 +228,10 @@ async function audit(link, probeTitle) {
       if (n === doc.body || n === doc.documentElement || n.querySelector('header, footer, nav, #global-navbar, #global-sidemenu')) return;
       n.remove();
     });
-    row.text = clean(doc.body?.textContent);
+    row.parts = collectSearchParts(doc, false);
+    row.visibleParts = collectSearchParts(doc, true);
+    row.detailLinks = detailLinksIn(doc, link.href);
+    if (link.useH1) row.label = clean(doc.querySelector('h1')?.textContent).slice(0, 60) || row.label;   // agent / neighborhood name
     // For the open page, also use the live DOM (covers contact links added by JavaScript).
     if (live && !link.probe && samePath(link.href, live.pageUrl)) contact.push(...live.contacts);
     row.flags.push(...checkContactLinks(contact));
@@ -197,9 +264,24 @@ function field(key, val, len, min, max) {
     <span class="len ${bad ? 'bad' : ''}">${bad ? '✗' : '✓'} ${len}</span></div>`;
 }
 
-function render(row) {
+// SEO criteria: title 45–60 chars, meta description 145–160 chars.
+const TITLE_MIN = 45, TITLE_MAX = 60, DESC_MIN = 145, DESC_MAX = 160;
+function seoProblems(row) {
+  const p = [];
+  const check = (name, len, min, max) => {
+    if (!len) p.push(`${name} MISSING`);
+    else if (len < min) p.push(`${name} too short: ${len} chars (needs ${min}–${max})`);
+    else if (len > max) p.push(`${name} too long: ${len} chars (needs ${min}–${max})`);
+  };
+  check('Title', row.title.length, TITLE_MIN, TITLE_MAX);
+  check('Description', row.description.length, DESC_MIN, DESC_MAX);
+  return p;
+}
+
+function render(row, container = resultsEl) {
   const div = document.createElement('div');
-  const broken = row.flags.length > 0;
+  const seo = seoProblems(row);
+  const broken = row.flags.length > 0 || seo.length > 0;
   div.className = 'page' + (broken ? ' broken' : '') + (selected.has(row.url) ? ' selected' : '');
   const statusOk = row.probe ? row.status === 404 : row.status === 200;
   const flags = row.flags.map(f => `<span class="flag">⚠ ${esc(f)}</span>`).join('');
@@ -208,13 +290,15 @@ function render(row) {
     <div class="head">
       <input type="checkbox" class="sel" title="Select for Copy selected" ${selected.has(row.url) ? 'checked' : ''}>
       <div class="ttl"><span class="name">${esc(row.label)}</span><span class="src">${esc(row.source)}</span></div>
+      <span class="seobadge ${seo.length ? 'bad' : ''}" title="${esc(seo.join('\n') || 'Title and description meet the criteria')}">${seo.length ? `SEO ✗ ${seo.length}` : 'SEO ✓'}</span>
       <span class="badge ${statusOk ? '' : 'bad'}">${row.status ?? 'ERR'}</span>
       <button class="rerun1" title="Re-run this page">↻</button></div>
     <a class="url" href="${esc(row.url)}" title="${esc(row.url)}" target="_blank">${esc(row.url)}</a>
+    ${seo.length ? `<div class="seoflags">${seo.map(f => `<span class="seoflag">✗ ${esc(f)}</span>`).join('')}</div>` : ''}
     ${flags ? `<div class="flags">${flags}</div>` : ''}
-    ${field('Title', row.title, row.title.length, 45, 60)}
-    ${field('Description', row.description, row.description.length, 145, 160)}`;
-  resultsEl.appendChild(div);
+    ${field('Title', row.title, row.title.length, TITLE_MIN, TITLE_MAX)}
+    ${field('Description', row.description, row.description.length, DESC_MIN, DESC_MAX)}`;
+  container.appendChild(div);
   return div;
 }
 
@@ -234,8 +318,29 @@ function renderHeaderCard() {
   resultsEl.appendChild(div);
 }
 
-// ---------- results interactions ----------
-resultsEl.addEventListener('click', async e => {
+// ---------- neighborhood / agent groups: each has its own toggle and tab ----------
+const dyn = {
+  Neighborhood: { tab: 'nbh', label: '🏘 Neighborhoods', el: $('res-nbh'), toggle: $('tog-nbh'), rows: [], on: false, token: 0 },
+  Agent: { tab: 'agent', label: '👤 Agents', el: $('res-agent'), toggle: $('tog-agent'), rows: [], on: false, token: 0 }
+};
+const groupByTab = name => Object.values(dyn).find(g => g.tab === name);
+// Rows shown on the current tab (Copy all / Copy selected / Select all / summary use these).
+const tabRows = () => groupByTab(activeTab)?.rows || rows;
+const tabPaneEl = () => groupByTab(activeTab)?.el || resultsEl;
+// Every audited row (keyword search uses these).
+const allRows = () => [...rows, ...dyn.Neighborhood.rows, ...dyn.Agent.rows];
+const probeTitle = () => rows.find(r => r.probe)?.title;
+function locateRow(url) {
+  for (const arr of [rows, dyn.Neighborhood.rows, dyn.Agent.rows]) {
+    const i = arr.findIndex(r => r.url === url);
+    if (i >= 0) return { arr, i };
+  }
+  return null;
+}
+
+// ---------- results interactions (all result panes) ----------
+const layoutEl = $('layout');
+layoutEl.addEventListener('click', async e => {
   // quick copy of a single title / description
   const qc = e.target.closest('.qcopy');
   if (qc && !qc.disabled) {
@@ -249,21 +354,20 @@ resultsEl.addEventListener('click', async e => {
   const btn = e.target.closest('.rerun1');
   if (!btn) return;
   const card = btn.closest('.page');
-  const idx = rows.findIndex(r => r.url === card.dataset.url);
-  if (idx < 0) return;
-  const old = rows[idx];
+  const loc = locateRow(card.dataset.url);
+  if (!loc) return;
+  const old = loc.arr[loc.i];
   btn.disabled = true;
   btn.classList.add('spin');
   const fresh = await audit({ href: old.url, text: old.label, source: old.source, probe: old.probe },
-                            old.probe ? undefined : (rows.find(r => r.probe)?.title));
-  rows[idx] = fresh;
-  const next = render(fresh);
-  card.replaceWith(next);
+                            old.probe ? undefined : probeTitle());
+  loc.arr[loc.i] = fresh;
+  card.replaceWith(render(fresh, card.parentElement));
   updateSummary();
   refreshFind();
 });
 
-resultsEl.addEventListener('change', e => {
+layoutEl.addEventListener('change', e => {
   const cb = e.target.closest('.sel');
   if (!cb) return;
   const card = cb.closest('.page');
@@ -273,8 +377,8 @@ resultsEl.addEventListener('change', e => {
 });
 
 $('selall').addEventListener('change', e => {
-  rows.forEach(r => e.target.checked ? selected.add(r.url) : selected.delete(r.url));
-  resultsEl.querySelectorAll('.page[data-url]').forEach(card => {
+  tabRows().forEach(r => e.target.checked ? selected.add(r.url) : selected.delete(r.url));
+  tabPaneEl().querySelectorAll('.page[data-url]').forEach(card => {
     const on = selected.has(card.dataset.url);
     card.classList.toggle('selected', on);
     card.querySelector('.sel').checked = on;
@@ -283,10 +387,11 @@ $('selall').addEventListener('change', e => {
 });
 
 function updateSelection() {
-  const n = rows.filter(r => selected.has(r.url)).length;
+  const list = tabRows();
+  const n = list.filter(r => selected.has(r.url)).length;
   $('copysel').textContent = `Copy selected (${n})`;
   $('copysel').disabled = n === 0;
-  $('selall').checked = rows.length > 0 && n === rows.length;
+  $('selall').checked = list.length > 0 && n === list.length;
 }
 
 function formatRows(list) {
@@ -304,28 +409,198 @@ async function copyWithFeedback(btn, label, text) {
   btn.textContent = 'Copied!';
   setTimeout(() => (btn.textContent = label()), 1500);
 }
-// Appended after the copied SEO when "Copy all" is clicked.
-const AI_PROMPT = 'Analyze these seo titles and description, find the pattern on how they were formed,. the charater reqirement is 46-60 in title and 146-160 in description. And then after analyzing, build me seo title and description for these pages: ';
-copyBtn.addEventListener('click', () => copyWithFeedback(copyBtn, () => 'Copy all', formatRows(rows) + '\n\n' + AI_PROMPT));
-$('copysel').addEventListener('click', () =>
-  copyWithFeedback($('copysel'), () => `Copy selected (${rows.filter(r => selected.has(r.url)).length})`,
-    formatRows(rows.filter(r => selected.has(r.url)))));
-rerunBtn.addEventListener('click', run);
+// ---------- template text added after "Copy selected" (editable, saved permanently) ----------
+const DEFAULT_TEMPLATE = 'Analyze these seo titles and description, find the pattern on how they were formed,. the charater reqirement is 46-60 in title and 146-160 in description. And then after analyzing, build me seo title and description for these pages: ';
+let copyTemplate = DEFAULT_TEMPLATE;
+chrome.storage.local.get('copyTemplate').then(s => {
+  if (typeof s.copyTemplate === 'string') copyTemplate = s.copyTemplate;
+  $('tpltext').value = copyTemplate;
+});
+let tplTimer;
+$('tpltext').addEventListener('input', () => {
+  copyTemplate = $('tpltext').value;
+  $('tplsaved').textContent = 'Saving…';
+  clearTimeout(tplTimer);
+  tplTimer = setTimeout(async () => {
+    await chrome.storage.local.set({ copyTemplate });
+    $('tplsaved').textContent = 'Saved ✓';
+  }, 300);
+});
+$('tplbtn').addEventListener('click', () => {
+  const box = $('tplbox');
+  box.hidden = !box.hidden;
+  $('tplbtn').classList.toggle('on', !box.hidden);
+  if (!box.hidden) $('tpltext').focus();
+});
+$('tplreset').addEventListener('click', async () => {
+  copyTemplate = $('tpltext').value = DEFAULT_TEMPLATE;
+  await chrome.storage.local.set({ copyTemplate });
+  $('tplsaved').textContent = 'Reset to default ✓';
+});
 
+// Copy all: SEO only. Copy selected: SEO of the ticked pages + the template text.
+copyBtn.addEventListener('click', () => copyWithFeedback(copyBtn, () => 'Copy all', formatRows(tabRows())));
+$('copysel').addEventListener('click', () => {
+  const seo = formatRows(tabRows().filter(r => selected.has(r.url)));
+  copyWithFeedback($('copysel'), () => `Copy selected (${tabRows().filter(r => selected.has(r.url)).length})`,
+    copyTemplate.trim() ? seo + '\n\n' + copyTemplate : seo);
+});
+rerunBtn.addEventListener('click', () => run());
+
+// ---------- per-tab refresh bars ----------
+const paneBtn = tab => document.querySelector(`.pbrefresh[data-refresh="${tab}"]`);
+function stampPane(tab) {
+  const t = document.getElementById('pt-' + tab);
+  if (t) t.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+document.querySelectorAll('.pbrefresh').forEach(b => b.addEventListener('click', () => {
+  const g = groupByTab(b.dataset.refresh);
+  if (!g) return run({ mainOnly: true });   // SEO audit tab: menu, navbar & footer pages only
+  dynPathsPromise = null;                   // re-read the sitemap so new pages show up
+  auditGroup(Object.keys(dyn).find(k => dyn[k] === g));
+}));
+
+let mainBusy = false;   // while the main audit runs, the status line shows its progress
 function updateSummary() {
-  const broken = rows.filter(r => !r.probe && r.flags.some(f => /404|HTTP|failed/i.test(f))).length;
-  const seoIssues = rows.filter(r => !r.title || !r.description).length;
-  const contact = rows.filter(r => r.flags.some(f => /mismatch|invalid/i.test(f))).length;
-  const hdr = live ? live.headerIssues.length : 0;
+  if (mainBusy) return;
+  const list = tabRows();
+  const broken = list.filter(r => !r.probe && r.flags.some(f => /404|HTTP|failed/i.test(f))).length;
+  const seoIssues = list.filter(r => !r.probe && seoProblems(r).length).length;
+  const contact = list.filter(r => r.flags.some(f => /mismatch|invalid/i.test(f))).length;
+  const hdr = live && !groupByTab(activeTab) ? live.headerIssues.length : 0;
   const stat = (n, label, plural) => `<span class="stat ${n ? 'bad' : ''}">${n ? '' : '✓ '}${n} ${label}${n === 1 || !plural ? '' : 's'}</span>`;
-  statusEl.innerHTML = `<span class="stat neutral">${rows.length} pages</span>` +
-    stat(broken, 'broken link', true) + stat(seoIssues, 'missing SEO tag', true) +
-    stat(contact, 'phone/email issue', true) + stat(hdr, 'empty header/footer link', true);
+  statusEl.innerHTML = `<span class="stat neutral">${list.length} pages</span>` +
+    stat(broken, 'broken link', true) + stat(seoIssues, seoIssues === 1 ? 'page failing SEO' : 'pages failing SEO', false) +
+    stat(contact, 'phone/email issue', true) + (groupByTab(activeTab) ? '' : stat(hdr, 'empty header/footer link', true));
 }
 
-async function run() {
+// ---------- dynamic pages: neighborhood and agent detail pages ----------
+// /neighborhoods and /team list these with JavaScript pagination, so the HTML only holds page 1.
+// The sitemap (sitemap-neighborhoods-dpages.xml, sitemap-agents-dpages.xml / sitemap-agent-dpages.xml)
+// lists all of them; links found on the audited pages are added as a fallback.
+const DETAIL_PATH = /^\/(neighborhoods|agents?)\/[^/{}?#]+\/?$/i;
+const pathKey = p => (p.replace(/\/+$/, '') || '/').toLowerCase();
+const slugTitle = p => decodeURIComponent(pathKey(p).split('/').pop()).replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+function detailLinksIn(doc, base) {
+  const origin = new URL(base).origin, out = new Set();
+  doc.querySelectorAll('a[href]').forEach(a => {
+    try {
+      const u = new URL(a.getAttribute('href'), base);
+      if (u.origin === origin && DETAIL_PATH.test(u.pathname)) out.add(pathKey(u.pathname));
+    } catch { /* bad href */ }
+  });
+  return [...out];
+}
+
+async function sitemapDetailPaths(origin) {
+  const getXml = async url => new DOMParser().parseFromString(await (await fetch(url, { cache: 'no-store' })).text(), 'text/xml');
+  const locs = d => [...d.getElementsByTagName('loc')].map(l => l.textContent.trim());
+  const toPath = u => { try { return new URL(u).pathname; } catch { return null; } };
+  try {
+    const top = locs(await getXml(origin + '/sitemap.xml'));
+    const paths = top.map(toPath).filter(p => p && DETAIL_PATH.test(p));   // plain sitemap (no index)
+    for (const sub of top.filter(u => /sitemap-(neighborhoods?|agents?)-dpages/i.test(u))) {
+      const subPath = toPath(sub);
+      if (!subPath) continue;
+      // fetch from the site being audited (preview hosts may list the production domain)
+      locs(await getXml(origin + subPath)).map(toPath).forEach(p => { if (p && DETAIL_PATH.test(p)) paths.push(p); });
+    }
+    return paths.map(pathKey);
+  } catch {
+    return [];
+  }
+}
+
+let siteOrigin = null;
+let dynPathsPromise = null;   // sitemap + page-link discovery, cached until the next full audit
+function getDynPaths() {
+  if (!dynPathsPromise) {
+    dynPathsPromise = sitemapDetailPaths(siteOrigin).then(list => {
+      const found = new Set(list);
+      rows.forEach(r => (r.detailLinks || []).forEach(p => found.add(p)));
+      return found;
+    });
+  }
+  return dynPathsPromise;
+}
+
+function tabButton(g) { return document.querySelector(`.tab[data-tab="${g.tab}"]`); }
+
+// Turn a group on (open its tab and audit it) or off (close the tab, drop its rows).
+async function setGroup(key, on) {
+  const g = dyn[key];
+  g.on = on;
+  g.token++;
+  if (!on) {
+    g.rows = [];
+    g.el.innerHTML = '';
+    tabButton(g).hidden = true;
+    if (activeTab === g.tab) showTab('seo');
+    refreshFind();
+    return;
+  }
+  tabButton(g).hidden = false;
+  tabButton(g).textContent = g.label;
+  showTab(g.tab);
+  await auditGroup(key);
+}
+
+async function auditGroup(key) {
+  const b = paneBtn(dyn[key].tab);
+  b.disabled = true;
+  try { await auditGroupInner(key); } finally { b.disabled = false; stampPane(dyn[key].tab); }
+}
+
+async function auditGroupInner(key) {
+  const g = dyn[key];
+  const token = ++g.token;
+  g.rows = [];
+  g.el.innerHTML = '<div class="dynstatus">Finding pages (sitemap + page links)…</div>';
+  const st = g.el.querySelector('.dynstatus');
+  const isMine = key === 'Neighborhood' ? p => /^\/neighborhoods\//.test(p) : p => /^\/agents?\//.test(p);
+  const audited = new Set(rows.map(r => pathKey(new URL(r.url).pathname)));
+  const list = [...await getDynPaths()].filter(p => isMine(p) && !audited.has(p))
+    .map(p => ({ href: siteOrigin + p, text: slugTitle(p), useH1: true, source: key }));
+  if (token !== g.token) return;
+  if (!list.length) {
+    st.textContent = `No ${key.toLowerCase()} pages found on this site (checked the sitemap and page links).`;
+    tabButton(g).textContent = `${g.label} (0)`;
+    if (activeTab === g.tab) { updateSummary(); updateSelection(); }
+    return;
+  }
+  let d = 0, j = 0;
+  const out = [];
+  const tick = () => { st.textContent = `Auditing ${key.toLowerCase()} pages ${d}/${list.length}…`; };
+  tick();
+  await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
+    while (j < list.length && token === g.token) {
+      const k = j++;
+      out[k] = await audit(list[k], probeTitle());
+      d++;
+      if (token === g.token) tick();
+    }
+  }));
+  if (token !== g.token || !g.on) return;   // toggled off or re-run meanwhile
+  out.sort((a, b) => a.label.localeCompare(b.label));
+  g.rows = out;
+  g.el.innerHTML = '';
+  out.forEach(r => render(r, g.el));
+  tabButton(g).textContent = `${g.label} (${out.length})`;
+  if (activeTab === g.tab) { updateSummary(); updateSelection(); }
+  refreshFind();
+}
+
+Object.entries(dyn).forEach(([key, g]) => g.toggle.addEventListener('change', () => setGroup(key, g.toggle.checked)));
+
+async function run(opts = {}) {
+  const mainOnly = !!opts.mainOnly;   // per-tab refresh of the SEO audit tab leaves the group tabs alone
+  paneBtn('seo').disabled = true;
   rows = [];
   resultsEl.innerHTML = '';
+  mainBusy = true;
+  if (!mainOnly) dynPathsPromise = null;
+  if (!mainOnly) Object.values(dyn).forEach(g => { g.token++; g.rows = []; g.el.innerHTML = g.on ? '<div class="dynstatus">Waiting for the main audit…</div>' : ''; g.toggle.disabled = true; });
   copyBtn.disabled = rerunBtn.disabled = $('selall').disabled = true;
   fillEl.style.width = '0';
   statusEl.textContent = 'Reading page…';
@@ -337,11 +612,13 @@ async function run() {
     [{ result: data }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractLinks });
   } catch (e) {
     statusEl.textContent = 'Cannot run on this page: ' + e.message;
-    rerunBtn.disabled = false;
+    rerunBtn.disabled = paneBtn('seo').disabled = false;
+    mainBusy = false;
     return;
   }
-  if (data.error) { statusEl.textContent = data.error; rerunBtn.disabled = false; return; }
+  if (data.error) { statusEl.textContent = data.error; rerunBtn.disabled = paneBtn('seo').disabled = false; mainBusy = false; return; }
   live = data;
+  siteOrigin = data.origin;
 
   $('site').textContent = new URL(data.origin).host;
   const links = buildList(data.links, data.origin, data.pageUrl);
@@ -370,12 +647,18 @@ async function run() {
   results.sort((a, b) => order.get(a.url) - order.get(b.url));
   rows = [...results, probeRow];
   renderHeaderCard();
-  rows.forEach(render);
+  rows.forEach(r => render(r));
 
+  mainBusy = false;
   updateSummary();
   updateSelection();
   refreshFind();
   copyBtn.disabled = rerunBtn.disabled = $('selall').disabled = false;
+  // Neighborhood / agent tabs that are switched on get re-audited too.
+  paneBtn('seo').disabled = false;
+  stampPane('seo');
+  // Neighborhood / agent tabs that are switched on get re-audited too (not on a per-tab refresh).
+  Object.entries(dyn).forEach(([key, g]) => { g.toggle.disabled = false; if (g.on && !mainOnly) auditGroup(key); });
 }
 
 // ---------- sitewide word search (hidden until the 🔍 Find button is pressed) ----------
@@ -396,66 +679,240 @@ function snippet(re, s) {
   return (a ? '…' : '') + esc(s.slice(a, m.index)) + '<mark>' + esc(m[0]) + '</mark>' + esc(s.slice(m.index + m[0].length, b)) + (b < s.length ? '…' : '');
 }
 
-// Green "seo" label when the match is in the title and/or meta description (hover for which).
-function seoTag(found) {
-  const seo = found.filter(f => f.label !== 'Page text');
-  if (!seo.length) return '';
-  const n = seo.reduce((s, f) => s + f.n, 0);
-  return `<span class="ftag seo" title="${seo.map(f => `${f.label} ×${f.n}`).join(', ')}">seo ×${n}</span>`;
+// Every searchable piece of a page as [where, text, element path, component], e.g.
+// ['alt', 'Home valuation chart', 'div.hero__media › img.hero__img', { name: 'Gallery component', … }].
+//
+// Self-contained on purpose: it also runs inside rendered pages via chrome.scripting.
+//   visibleOnly = false → everything in the HTML: any text, alt text, title/aria attributes, link URLs, meta tags
+//   visibleOnly = true  → only text inside text elements (h1–h6, p, span, li, ol, links, buttons …), modals included
+// Testimonial sections and slider clones are always skipped.
+function collectSearchParts(doc, visibleOnly) {
+  doc = doc || document;
+  const body = doc.body;
+  const parts = [];
+  if (!body) return parts;
+  const clean = s => (s || '').replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
+
+  // ---- component naming: <section id="section-…"> <div class="gallery-component …"> ----
+  const GENERIC = /^(section|redesign|parallax|hidable|modal|collection|lp-[\w-]*|js-[\w-]*|is-[\w-]*|video-wrapper|overlay-component|height-class-[\w-]*)$/i;
+  const ABBR = { hv: 'home valuation', ig: 'Instagram', cta: 'CTA' };
+  const humanize = c => c.split(/[-_]+/).map(w => ABBR[w.toLowerCase()] || w).join(' ').replace(/^\w/, ch => ch.toUpperCase());
+  const secCache = new Map();
+  const componentOf = el => {
+    const sec = el.closest('section[id^="section-"]');
+    if (!sec) {
+      // Site-wide parts: the same on every page, so search results show them only once.
+      if (el.closest('#global-navbar, header')) return { name: 'Header / navbar', global: true };
+      if (el.closest('#global-sidemenu')) return { name: 'Side menu', global: true };
+      if (el.closest('#lp-consent-banner, [class*="consent" i]')) return { name: 'Cookie banner', global: true };
+      if (el.closest('footer, [class*="footer" i]')) return { name: 'Footer', global: true };
+      // Outermost popup/widget, so inner ids like "qualifying-questions-modal-title" still name the whole popup.
+      let holder = null;
+      for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+        if (e.matches('[id^="global-"], [id*="modal" i], [class*="floating-contact" i]')) holder = e;
+      }
+      if (holder) {
+        const raw = holder.id || [...holder.classList].find(c => /floating-contact/i.test(c));
+        const isPopup = /modal|pop-?up/i.test(raw);
+        const name = humanize(raw.replace(/^(modal-)?(global-)?/i, '').replace(/-?modal$/i, ''));
+        return { name: name + (isPopup ? ' (popup)' : ''), id: holder.id, global: true };
+      }
+      return { name: 'Page (outside sections)' };
+    }
+    if (secCache.has(sec)) return secCache.get(sec);
+    let cls = null;
+    for (const child of sec.children) {
+      if (/^(SCRIPT|LINK|STYLE|TEMPLATE|NOSCRIPT)$/.test(child.tagName)) continue;
+      cls = [...child.classList].find(c => !GENERIC.test(c) && !c.includes('__') && !c.includes('--'));
+      if (cls) break;
+    }
+    const info = { name: cls ? humanize(cls) : 'Section', cls: cls || '', heading: clean(sec.querySelector('h1, h2, h3')?.textContent).slice(0, 40), id: sec.id };
+    secCache.set(sec, info);
+    return info;
+  };
+
+  // ---- element path inside its section (max 4 levels) ----
+  const desc = el => {
+    let s = el.tagName.toLowerCase();
+    if (el.id) s += '#' + el.id;
+    const cls = [...el.classList].filter(c => !/^(js-|is-|slick-|splide)/.test(c)).slice(0, 2);
+    if (cls.length) s += '.' + cls.join('.');
+    return s;
+  };
+  const pathOf = el => {
+    const out = [];
+    for (let e = el; e && e !== body && e.nodeType === 1 && out.length < 4; e = e.parentElement) {
+      if (e.matches('section[id^="section-"]')) break;
+      out.unshift(desc(e));
+    }
+    return out.join(' › ');
+  };
+
+  // ---- what to skip ----
+  const testiSel = '[class*="testimonial" i], [id*="testimonial" i]';
+  const testi = [...doc.querySelectorAll(testiSel)]
+    .filter(n => n !== body && n !== doc.documentElement && !n.querySelector('header, footer, nav, #global-navbar, #global-sidemenu'));
+  const inTesti = el => !!el.closest(testiSel) && testi.some(t => t.contains(el));
+  const isClone = el => !!el.closest('.slick-cloned, .splide__slide--clone, .swiper-slide-duplicate');
+  // "Visible text" = text inside text elements (headings, p, span, li, links, buttons …), read from the raw HTML,
+  // so text in modals and popups still counts. Attributes (alt, title, aria-label, URLs, meta) are not visible text.
+  const TEXT_TAGS = 'h1, h2, h3, h4, h5, h6, p, span, li, ol, ul, a, button, label, blockquote, q, td, th, dt, dd, figcaption, strong, em, b, i, small, cite';
+  const isVisible = el => !visibleOnly || !!el.closest(TEXT_TAGS);
+  const add = (where, s, el, path) => {
+    s = clean(s);
+    if (!s) return;
+    if (el && (inTesti(el) || isClone(el) || !isVisible(el))) return;
+    parts.push([where, s, path || pathOf(el), el ? componentOf(el) : null]);
+  };
+
+  // ---- collect ----
+  if (!visibleOnly) {   // not visible on screen: only searched in "Search everything" mode
+    doc.querySelectorAll('meta[property^="og:" i], meta[name^="twitter:" i], meta[name="keywords" i]').forEach(m => {
+      const attr = m.hasAttribute('property') ? 'property' : 'name';
+      add('meta tag', m.getAttribute('content'), null, `head › meta[${attr}="${m.getAttribute(attr)}"]`);
+    });
+    body.querySelectorAll('img[alt]').forEach(e => add('alt', e.getAttribute('alt'), e));
+    body.querySelectorAll('[title]').forEach(e => add('title attribute', e.getAttribute('title'), e));
+    body.querySelectorAll('[aria-label]').forEach(e => add('aria-label', e.getAttribute('aria-label'), e));
+    body.querySelectorAll('a[href]').forEach(e => add('link URL', e.getAttribute('href'), e));
+    body.querySelectorAll('[placeholder]').forEach(e => add('placeholder', e.getAttribute('placeholder'), e));
+  }
+  body.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(e => add(e.tagName, e.textContent, e));
+  body.querySelectorAll('a').forEach(e => add('link text', e.textContent, e));
+  body.querySelectorAll('button').forEach(e => add('button', e.textContent, e));
+
+  // Plain text, grouped by the element that directly holds it (p, span, li, div …).
+  const skip = 'h1, h2, h3, h4, h5, h6, a, button, script, style, noscript, template';
+  const byParent = new Map();
+  const walker = doc.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const p = n.parentElement;
+    if (!p || !n.nodeValue.trim() || p.closest(skip)) continue;
+    byParent.set(p, (byParent.get(p) || '') + ' ' + n.nodeValue);
+  }
+  byParent.forEach((t, p) => add('body text', t, p));
+  return parts;
+}
+
+
+const SEO_WHERE = new Set(['title', 'description', 'meta tag']);
+// Text fragments (#:~:text=) only scroll to text that is visible on the page.
+const VISIBLE_WHERE = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'link text', 'button', 'body text']);
+const MAX_HITS_SHOWN = 6;
+
+function hitHtml(url, h, re, once) {
+  const open = VISIBLE_WHERE.has(h.where)
+    ? `<a class="fopen" href="${esc(url + '#:~:text=' + encodeURIComponent(once.exec(h.text)[0]))}" target="_blank" title="Open the page scrolled to this text">↗</a>` : '';
+  const c = h.comp;
+  const comp = c ? `<span class="fsec" title="${esc(c.id ? `#${c.id}${c.cls ? ' › div.' + c.cls : ''}` : c.name)}">${esc(c.name)}</span>${c.heading ? ` <span class="fhead">“${esc(c.heading)}”</span>` : ''} › ` : '';
+  const onPages = h.pages ? ` <span class="fcount" title="${esc(h.pages.join('\n'))}">· same on ${h.pages.length} page${h.pages.length === 1 ? '' : 's'}</span>` : '';
+  return `<div class="fitem">${comp}<span class="fwhere">${esc(h.where)}</span>${h.path ? ` in <code class="fel" title="${esc(h.path)}">${esc(h.path)}</code>` : ''}${h.n > 1 ? ` <span class="fcount">×${h.n}</span>` : ''}${onPages} ${open}
+    <div class="fsnip">${snippet(re, h.text)}</div></div>`;
+}
+
+// One result card: title line with location tags, first MAX_HITS_SHOWN elements, the rest behind "Show all".
+function resultCard(title, sub, url, hits, re, once) {
+  const byWhere = new Map();
+  hits.forEach(h => byWhere.set(h.where, (byWhere.get(h.where) || 0) + h.n));
+  const el = document.createElement('div');
+  el.className = 'fhit';
+  if (url) el.dataset.url = url;
+  el.innerHTML = `<div class="fh"><b>${esc(title)}</b> <span class="fpath">${esc(sub)}</span>
+      ${[...byWhere].map(([w, n]) => `<span class="ftag ${SEO_WHERE.has(w) ? 'seo' : 'body'}">${SEO_WHERE.has(w) ? 'seo · ' : ''}${esc(w)} ×${n}</span>`).join('')}</div>
+    ${hits.slice(0, MAX_HITS_SHOWN).map(h => hitHtml(h.url || url, h, re, once)).join('')}
+    ${hits.length > MAX_HITS_SHOWN ? `<div class="fmore" hidden>${hits.slice(MAX_HITS_SHOWN).map(h => hitHtml(h.url || url, h, re, once)).join('')}</div>
+      <button class="fmore-btn" data-more="${hits.length - MAX_HITS_SHOWN}">Show all ${hits.length} elements (+${hits.length - MAX_HITS_SHOWN} more)</button>` : ''}`;
+  return el;
 }
 
 function runFind() {
   const re = buildRegex();
   const res = $('fres'), sum = $('fsum');
+  if (!re) { res.innerHTML = ''; sum.textContent = ''; return; }
+  const list = allRows().filter(r => !r.probe);
+  if (!list.length) { res.innerHTML = ''; sum.textContent = 'Run the audit first — nothing to search yet.'; return; }
+
+  // Default: visible text only (text elements). "Search everything" adds attributes, alt text, URLs, meta and loose text.
+  const everything = $('fall').checked;
+
   res.innerHTML = '';
-  if (!re) { sum.textContent = ''; return; }
-  const list = rows.filter(r => !r.probe);
-  if (!list.length) { sum.textContent = 'Run the audit first — nothing to search yet.'; return; }
   const scope = $('fscope').value;
+  const once = new RegExp(re.source, re.flags.replace('g', ''));
   let pages = 0, total = 0;
+  const shared = new Map();   // header / side menu / footer / site-wide popups: identical on every page → listed once
+  const cards = [];
   for (const r of list) {
-    const found = [];
-    if (scope !== 'body') {
-      const t = countMatches(re, r.title), d = countMatches(re, r.description);
-      if (t) found.push({ label: 'Title', n: t, text: r.title });
-      if (d) found.push({ label: 'Description', n: d, text: r.description });
+    const pieces = [['title', r.title, 'head › title'], ['description', r.description, 'head › meta[name="description"]'],
+      ...((everything ? r.parts : r.visibleParts) || [])];
+    const hits = [];
+    for (const [where, text, path, comp] of pieces) {
+      const isSeo = SEO_WHERE.has(where);
+      if ((scope === 'seo' && !isSeo) || (scope === 'body' && isSeo)) continue;
+      const n = countMatches(re, text);
+      if (!n) continue;
+      if (comp?.global) {
+        const key = [comp.name, where, path, text].join('\u0001');
+        const s = shared.get(key) || { where, text, path, comp, n, isSeo, url: r.url, pages: [] };
+        s.pages.push(new URL(r.url).pathname || '/');
+        shared.set(key, s);
+        continue;
+      }
+      hits.push({ where, text, path, comp, n, isSeo });
     }
-    if (scope !== 'seo') {
-      const b = countMatches(re, r.text);
-      if (b) found.push({ label: 'Page text', n: b, text: r.text });
-    }
-    if (!found.length) continue;
+    if (!hits.length) continue;
     pages++;
-    total += found.reduce((s, f) => s + f.n, 0);
-    const path = new URL(r.url).pathname || '/';
-    const el = document.createElement('div');
-    el.className = 'fhit';
-    el.dataset.url = r.url;
-    el.innerHTML = `<div class="fh"><b>${esc(r.label)}</b> <span class="fpath">${esc(path)}</span>
-        ${seoTag(found)}${found.some(f => f.label === 'Page text') ? `<span class="ftag body">page ×${found.find(f => f.label === 'Page text').n}</span>` : ''}</div>
-      <div class="fsnip">${snippet(re, found[0].text)}</div>`;
-    res.appendChild(el);
+    hits.sort((a, b) => b.isSeo - a.isSeo);   // SEO places first
+    total += hits.reduce((s, h) => s + h.n, 0);
+    cards.push(resultCard(r.label, new URL(r.url).pathname || '/', r.url, hits, re, once));
   }
-  sum.innerHTML = pages
-    ? `<b>${pages}</b> of ${list.length} pages contain it (${total} match${total === 1 ? '' : 'es'})`
-    : `Not found on any of the ${list.length} audited pages.`;
+
+  const sharedHits = [...shared.values()];
+  if (sharedHits.length) {
+    const names = [...new Set(sharedHits.map(h => h.comp.name))].join(' · ');
+    res.appendChild(resultCard('Site-wide (same on every page)', names, null, sharedHits, re, once)).classList.add('shared');
+  }
+  cards.forEach(c => res.appendChild(c));
+
+  const sharedN = sharedHits.reduce((s, h) => s + h.n, 0);
+  sum.innerHTML = (pages || sharedHits.length
+    ? `<b>${pages}</b> of ${list.length} pages contain it (${total} match${total === 1 ? '' : 'es'})` +
+      (sharedHits.length ? ` + ${sharedN} in the header / side menu / footer` : '')
+    : `Not found on any of the ${list.length} audited pages.`) +
+    ` · ${everything ? 'searching everything (alt text, attributes, link URLs, meta tags, loose text)' : 'visible text only (headings, paragraphs, spans, lists, links, buttons)'}`;
 }
+function refreshFind() { if (activeTab === 'search') runFind(); }
 
-function refreshFind() { if (!$('finder').hidden) runFind(); }
+// ---------- tabs: SEO audit / Keyword search ----------
+let activeTab = 'seo';
+function showTab(name) {
+  activeTab = name;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
+  document.querySelectorAll('[data-pane]').forEach(p => { p.hidden = !p.dataset.pane.split(" ").includes(name); });
+  $('layout').scrollTop = 0;
+  if (name === 'search') { $('fq').focus(); runFind(); }
+  else { updateSummary(); updateSelection(); }   // summary, Select all and copy follow the tab
+}
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
-$('findtoggle').addEventListener('click', () => {
-  const f = $('finder');
-  f.hidden = !f.hidden;
-  $('findtoggle').classList.toggle('on', !f.hidden);
-  if (!f.hidden) { $('fq').focus(); runFind(); }
-});
 let findTimer;
 ['input', 'change'].forEach(ev => $('finder').addEventListener(ev, () => { clearTimeout(findTimer); findTimer = setTimeout(runFind, 150); }));
 $('fres').addEventListener('click', e => {
+  if (e.target.closest('a')) return;   // the ↗ link opens the page instead
+  // "Show all N elements" expands / collapses the rest of that page's matches
+  const more = e.target.closest('.fmore-btn');
+  if (more) {
+    const box = more.previousElementSibling;
+    box.hidden = !box.hidden;
+    more.textContent = box.hidden ? `Show all elements (+${more.dataset.more} more)` : 'Show fewer';
+    return;
+  }
+  // Clicking the page name jumps to its card (SEO audit, Neighborhoods or Agents tab)
+  if (!e.target.closest('.fh')) return;
   const hit = e.target.closest('.fhit');
-  if (!hit) return;
-  const card = [...resultsEl.querySelectorAll('.page[data-url]')].find(c => c.dataset.url === hit.dataset.url);
+  const card = [...layoutEl.querySelectorAll('.page[data-url]')].find(c => c.dataset.url === hit.dataset.url);
   if (!card) return;
+  const pane = card.closest('[data-pane]');
+  showTab(pane ? pane.dataset.pane.split(' ')[0] : 'seo');
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
 });
@@ -748,7 +1205,9 @@ $('stest').addEventListener('click', async () => {
 });
 
 refreshKeyBadge();
-run();
+// Expand window with handed-over results → show them; otherwise audit now.
+const HANDOFF = new URLSearchParams(location.search).get('state');
+(HANDOFF ? restoreState(HANDOFF) : Promise.resolve(false)).then(ok => { if (!ok) run(); });
 chrome.storage.local.get(['kwList', 'kwActive']).then(s => {
   savedKw = s.kwList || [];
   (s.kwActive || []).forEach(t => savedKw.includes(t) && activeKw.add(t));
