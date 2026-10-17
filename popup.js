@@ -13,11 +13,9 @@ $('expand').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   // Hand the finished results to the larger window so it doesn't re-audit everything.
   // chrome.storage.session is memory-only; the new window deletes the entry as soon as it reads it.
-  let key = '';
-  if (rows.length && !mainBusy) {
-    key = 'handoff-' + Date.now();
-    try { await chrome.storage.session.set({ [key]: snapshotState() }); } catch { key = ''; }
-  }
+  // The current image always carries over; audit results only when the audit has finished.
+  let key = 'handoff-' + Date.now();
+  try { await chrome.storage.session.set({ [key]: snapshotState() }); } catch { key = ''; }
   await chrome.windows.create({
     url: chrome.runtime.getURL('popup.html') + '?tab=' + tab.id + (key ? '&state=' + key : ''),
     type: 'popup', width: 1280, height: 860
@@ -28,7 +26,7 @@ $('expand').addEventListener('click', async () => {
 function snapshotState() {
   const stamp = t => document.getElementById('pt-' + t)?.textContent || '';
   return {
-    rows, live, siteOrigin, activeTab,
+    rows: mainBusy ? [] : rows, live, siteOrigin, activeTab, pic: current,
     selected: [...selected],
     stamps: { seo: stamp('seo'), nbh: stamp('nbh'), agent: stamp('agent') },
     groups: Object.fromEntries(Object.entries(dyn).map(([k, g]) => [k, { on: g.on, rows: g.rows }]))
@@ -42,7 +40,9 @@ async function restoreState(key) {
     s = (await chrome.storage.session.get(key))[key];
     await chrome.storage.session.remove(key);
   } catch { /* fall through */ }
-  if (!s || !s.rows?.length) return false;
+  if (!s) { loadPic(); return false; }
+  if (s.pic) showPic(s.pic); else loadPic();   // same image as the small popup, no reload
+  if (!s.rows?.length) return false;            // audit was still running: start it fresh
 
   rows = s.rows;
   live = s.live;
@@ -292,7 +292,7 @@ function render(row, container = resultsEl) {
       <div class="ttl"><span class="name">${esc(row.label)}</span><span class="src">${esc(row.source)}</span></div>
       <span class="seobadge ${seo.length ? 'bad' : ''}" title="${esc(seo.join('\n') || 'Title and description meet the criteria')}">${seo.length ? `SEO ✗ ${seo.length}` : 'SEO ✓'}</span>
       <span class="badge ${statusOk ? '' : 'bad'}">${row.status ?? 'ERR'}</span>
-      <button class="rerun1" title="Re-run this page">↻</button></div>
+      <button class="rerun1" title="Re-run this page"><svg class="ico"><use href="#i-refresh"/></svg></button></div>
     <a class="url" href="${esc(row.url)}" title="${esc(row.url)}" target="_blank">${esc(row.url)}</a>
     ${seo.length ? `<div class="seoflags">${seo.map(f => `<span class="seoflag">✗ ${esc(f)}</span>`).join('')}</div>` : ''}
     ${flags ? `<div class="flags">${flags}</div>` : ''}
@@ -320,8 +320,8 @@ function renderHeaderCard() {
 
 // ---------- neighborhood / agent groups: each has its own toggle and tab ----------
 const dyn = {
-  Neighborhood: { tab: 'nbh', label: '🏘 Neighborhoods', el: $('res-nbh'), toggle: $('tog-nbh'), rows: [], on: false, token: 0 },
-  Agent: { tab: 'agent', label: '👤 Agents', el: $('res-agent'), toggle: $('tog-agent'), rows: [], on: false, token: 0 }
+  Neighborhood: { tab: 'nbh', label: 'Neighborhoods', el: $('res-nbh'), toggle: $('tog-nbh'), rows: [], on: false, token: 0 },
+  Agent: { tab: 'agent', label: 'Agents', el: $('res-agent'), toggle: $('tog-agent'), rows: [], on: false, token: 0 }
 };
 const groupByTab = name => Object.values(dyn).find(g => g.tab === name);
 // Rows shown on the current tab (Copy all / Copy selected / Select all / summary use these).
@@ -930,9 +930,12 @@ const SKIP_TAGS = new Set(['comic', '4koma', 'manga', 'monochrome', 'greyscale',
 const GIRL_TAG = /^(1girl|[2-9]\+?girls|multiple_girls)$/;
 const NOT_FEMALE_TAG = /^([1-9]\+?boys?|multiple_boys|male_focus|[1-9]\+?others?|trap|otoko_no_ko|reverse_trap)$/;
 
-async function danbooru(keyword) {
+// styleTags: saved tags that are switched on; an image must have any / all of them (tagMatch).
+// opts.waifu: default random picks look like the other sites' "waifu" images: one girl as the subject (1girl + solo).
+async function danbooru(keyword, styleTags = [], opts = {}) {
   const tag = keyword.trim().toLowerCase().replace(/\s+/g, '_');
-  for (let n = 0; n < 20; n++) {
+  const want = styleTags.filter(t => t !== tag);   // the searched tag is already guaranteed
+  for (let n = 0; n < (want.length ? 30 : 20); n++) {
     const res = await fetch(`${DANBOORU}/posts/random.json?tags=${tag ? encodeURIComponent(tag) + '+' : ''}rating:g`, { cache: 'no-store' });
     if (res.status === 404) return null;                       // no SFW posts for that tag
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -942,19 +945,23 @@ async function danbooru(keyword) {
     if (tags.some(t => SKIP_TAGS.has(t))) continue;
     // Female characters only: must have a "girl" tag and no boy / male-focus / other-gender tag.
     if (!tags.some(t => GIRL_TAG.test(t)) || tags.some(t => NOT_FEMALE_TAG.test(t))) continue;
+    if (opts.waifu && !(tags.includes('1girl') && tags.includes('solo'))) continue;
+    if (want.length && !(tagMatch === 'all' ? want.every(t => tags.includes(t)) : (want.some(t => tags.includes(t)) || styleTags.includes(tag)))) continue;
     const artist = (p.tag_string_artist || '').split(' ')[0].replace(/_/g, ' ');
     // Source series = Danbooru's "copyright" tags (the franchise). Skip "original"; show up to two.
     const series = (p.tag_string_copyright || '').split(' ').filter(t => t && t !== 'original').slice(0, 2)
       .map(t => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())).join(' · ');
     return { url: p.large_file_url || p.file_url, full: p.file_url, credit: artist || null, series,
-             creditHref: `${DANBOORU}/posts/${p.id}`, site: 'Danbooru' };
+             creditHref: `${DANBOORU}/posts/${p.id}`, site: 'Danbooru',
+             tags: (p.tag_string_general || '').split(' ').filter(Boolean) };   // general tags only (no series/character/artist)
   }
   return null;
 }
 
 // No keyword: random pick from three SFW sources, falling back to the others.
+// Default Danbooru picks are "waifu" style (one girl, solo), matching the other sites.
 // Danbooru is listed twice so about half of the random picks come from it: it is the only source that reports the series.
-const randomDanbooru = async () => danbooru('1girl');
+const randomDanbooru = async () => danbooru('1girl', [], { waifu: true });
 const IMAGE_SOURCES = [
   randomDanbooru,
   randomDanbooru,
@@ -989,6 +996,7 @@ function showPic(pic) {
       $('piccredit').innerHTML = `${serie}Art by ${who}<br>via ${esc(pic.site)}`;
       $('picmsg').textContent = '';
       $('picmsg').classList.remove('over');
+      if (!$('tagmodal').hidden) renderTagPanel();   // tag panel open: show the new image's tags
       ok(true);
     };
     img.onerror = () => ok(false);
@@ -1044,13 +1052,19 @@ async function loadPic() {
   const typed = $('kw').value.trim();
   const on = [...activeKw];
   const kw = typed || (on.length ? showTag(on[Math.floor(Math.random() * on.length)]) : '');
+  const style = [...activeTags];   // saved image tags that are switched on
   $('picroll').disabled = true;
   if (!current) picMessage('Loading image…');
 
-  if (kw) {
+  if (kw || style.length) {
+    // Danbooru's free tier allows 2 search tags (one tag + rating:g). Without a series, search one of the saved tags;
+    // the rest are checked on each result.
+    const searchTag = kw || style[Math.floor(Math.random() * style.length)];
     try {
-      const pic = await danbooru(kw);
-      if (!pic) picMessage(`No suitable images found for “${kw}” (SFW, female characters, non-manga). Try again or another tag.`);
+      const pic = await danbooru(searchTag, style);
+      if (!pic) picMessage(kw
+        ? `No suitable images found for “${kw}”${style.length ? ' with your saved tags' : ''} (SFW, female characters, non-manga). Try again${style.length ? ', use Match: any, or turn some tags off' : ' or another tag'}.`
+        : `No images matched your saved tags. Try again, use Match: any, or turn some tags off.`);
       else if (!(await showPic(pic))) picMessage('Image failed to load. Try again.');
     } catch (e) {
       picMessage('Search failed: ' + e.message);
@@ -1067,6 +1081,100 @@ async function loadPic() {
   }
   $('picroll').disabled = false;
 }
+
+// ---------- image tags: pick tags from the current image (or search any tag), save them, filter new images ----------
+// Only general tags (hair, clothes, pose, setting …). Series / character tags stay in the search box above.
+let savedTags = [];            // e.g. "long_hair"
+const activeTags = new Set();  // saved tags that are switched on
+let tagMatch = 'any';          // 'any' | 'all'
+chrome.storage.local.get(['styleTags', 'styleActive', 'styleMatch']).then(s => {
+  savedTags = s.styleTags || [];
+  (s.styleActive || []).forEach(t => savedTags.includes(t) && activeTags.add(t));
+  tagMatch = s.styleMatch === 'all' ? 'all' : 'any';
+  $('tmatch').value = tagMatch;
+  updateTagButton();
+});
+function persistTags() {
+  chrome.storage.local.set({ styleTags: savedTags, styleActive: [...activeTags], styleMatch: tagMatch });
+  updateTagButton();
+}
+function updateTagButton() {
+  $('tagscount').textContent = activeTags.size || '';
+  $('tagsbtn').classList.toggle('on', activeTags.size > 0);
+}
+const tagName = t => t.replace(/_/g, ' ');
+
+function saveTag(t, on = true) {
+  if (!savedTags.includes(t)) savedTags.push(t);
+  if (on) activeTags.add(t);
+  persistTags();
+  renderTagPanel();
+}
+function unsaveTag(t) {
+  savedTags = savedTags.filter(x => x !== t);
+  activeTags.delete(t);
+  persistTags();
+  renderTagPanel();
+}
+
+function renderTagPanel() {
+  const cur = current?.tags || [];
+  $('tcur').innerHTML = cur.length
+    ? cur.map(t => `<span class="tchip ${savedTags.includes(t) ? 'saved' : ''}" data-cur="${esc(t)}" title="${savedTags.includes(t) ? 'Saved: click to remove' : 'Click to save'}">${savedTags.includes(t) ? '✓ ' : '+ '}${esc(tagName(t))}</span>`).join('')
+    : `<span class="tnone">${current ? `This image is from ${esc(current.site)}, which doesn't provide tags. Press 🎲 for a Danbooru image, or search below.` : 'No image yet.'}</span>`;
+  $('tcurcount').textContent = cur.length ? `(${cur.length})` : '';
+  $('tsaved').innerHTML = savedTags.length
+    ? savedTags.map(t => `<span class="tchip ${activeTags.has(t) ? 'on' : ''}" data-saved="${esc(t)}" title="Click to turn on/off">${esc(tagName(t))}<span class="tx" data-del="${esc(t)}" title="Delete">✕</span></span>`).join('')
+    : '<span class="tnone">No saved tags yet. Click tags on the image above, or search below.</span>';
+}
+
+$('tagsbtn').addEventListener('click', () => { renderTagPanel(); $('tagmodal').hidden = false; });
+$('tclose').addEventListener('click', () => { $('tagmodal').hidden = true; });
+$('tagmodal').addEventListener('click', e => { if (e.target === $('tagmodal')) $('tagmodal').hidden = true; });
+$('tcur').addEventListener('click', e => {
+  const c = e.target.closest('[data-cur]');
+  if (!c) return;
+  const t = c.dataset.cur;
+  savedTags.includes(t) ? unsaveTag(t) : saveTag(t);
+});
+$('tsaved').addEventListener('click', e => {
+  const del = e.target.closest('[data-del]');
+  if (del) { unsaveTag(del.dataset.del); return; }
+  const c = e.target.closest('[data-saved]');
+  if (!c) return;
+  const t = c.dataset.saved;
+  activeTags.has(t) ? activeTags.delete(t) : activeTags.add(t);
+  persistTags();
+  renderTagPanel();
+});
+$('tmatch').addEventListener('change', () => { tagMatch = $('tmatch').value; persistTags(); });
+$('tapply').addEventListener('click', () => { $('tagmodal').hidden = true; loadPic(); });
+
+// Find any general tag (Danbooru autocomplete, category 0 = general).
+const addFound = () => {
+  const t = $('tfind').value.trim().toLowerCase().replace(/\s+/g, '_');
+  if (!t) return;
+  saveTag(t);
+  $('tfind').value = '';
+};
+$('tadd').addEventListener('click', addFound);
+$('tfind').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addFound(); } });
+let tfTimer;
+$('tfind').addEventListener('input', () => {
+  clearTimeout(tfTimer);
+  const q = $('tfind').value.trim();
+  if (q.length < 2) return;
+  tfTimer = setTimeout(async () => {
+    try {
+      const url = `${DANBOORU}/autocomplete.json?search[query]=${encodeURIComponent(q.toLowerCase().replace(/\s+/g, '_'))}&search[type]=tag_query&limit=15`;
+      const list = await (await fetch(url)).json();
+      $('tfindopts').innerHTML = list
+        .filter(t => t.category == null || Number(t.category) === 0)
+        .map(t => `<option value="${esc(t.value)}">${esc(t.label || t.value)}${t.post_count ? ' (' + t.post_count + ')' : ''}</option>`)
+        .join('');
+    } catch { /* suggestions are optional */ }
+  }, 250);
+});
 
 $('picroll').addEventListener('click', loadPic);
 $('kwadd').addEventListener('click', () => { if (addKeyword()) loadPic(); });
@@ -1097,7 +1205,7 @@ function openLightbox() {
   $('lbimg').src = pic.url;
   $('lbopen').href = pic.full || pic.url;
   $('lbnote').textContent = pic.full && pic.full !== pic.url ? 'Loading full size…' : '';
-  $('lbsave').textContent = '⬇ Save';
+  $('lbsave').textContent = 'Save image';
   $('lightbox').hidden = false;
   if (pic.full && pic.full !== pic.url) {
     const big = new Image();
@@ -1136,7 +1244,7 @@ $('picimg').addEventListener('click', openLightbox);
 $('lbclose').addEventListener('click', closeLightbox);
 $('lbsave').addEventListener('click', savePic);
 $('lightbox').addEventListener('click', e => { if (e.target === $('lightbox') || e.target === $('lbimg')) closeLightbox(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeLightbox(); $('settings').hidden = true; } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeLightbox(); $('settings').hidden = true; $('tagmodal').hidden = true; } });
 
 // ---------- AI rewrite settings (API keys for the right-click "Rewrite with AI" menu) ----------
 const KEY_FIELDS = ['provider', 'geminiKey', 'geminiModel', 'apiKey', 'model'];
@@ -1171,6 +1279,7 @@ $('sprovider').addEventListener('change', showProviderFields);
 document.querySelectorAll('.seye').forEach(b => b.addEventListener('click', () => {
   const inp = $(b.dataset.for);
   inp.type = inp.type === 'password' ? 'text' : 'password';
+  b.textContent = inp.type === 'password' ? 'Show' : 'Hide';
 }));
 
 $('ssave').addEventListener('click', async () => {
@@ -1212,4 +1321,4 @@ chrome.storage.local.get(['kwList', 'kwActive']).then(s => {
   savedKw = s.kwList || [];
   (s.kwActive || []).forEach(t => savedKw.includes(t) && activeKw.add(t));
   renderChips();
-}).finally(loadPic);
+}).finally(() => { if (!HANDOFF) loadPic(); });   // Expand window: restoreState() shows the handed-over image
