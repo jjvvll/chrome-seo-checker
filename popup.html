@@ -178,6 +178,7 @@
   .fwhere { font-weight: 600; color: var(--text); }
   .fsec { font-weight: 600; font-size: 11.5px; color: var(--violet); background: var(--violet-soft); padding: 1px 7px; border-radius: var(--r-sm); }
   .fhead { font-size: 11.5px; font-style: italic; }
+  .ftpl { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 6px; }
   .fel { font: 11px/1.4 var(--mono); color: var(--text-2); background: var(--sunken); padding: 1px 6px; border-radius: 4px; word-break: break-all; }
   .fcount { font-weight: 600; color: var(--text-2); }
   .fopen { color: var(--accent); text-decoration: none; font-weight: 600; padding: 0 4px; }
@@ -185,6 +186,26 @@
   .fitem .fsnip { margin: 4px 0 0; }
   .fmore-btn { margin-top: 10px; height: 28px; font-size: 12px; }
   mark { background: #fef0c7; color: #7a2e0e; border-radius: 3px; padding: 0 2px; }
+
+  /* colour search */
+  #cfinder { padding: 12px 0; border-top: 1px solid var(--line); }
+  #cfinder[hidden] { display: none; }
+  #cfinder .frow .grow { flex: 1; }
+  .cwrap { flex: 1 1 100%; display: flex; gap: 8px; }
+  .cpickwrap { position: relative; width: 34px; height: 34px; flex: none; border-radius: var(--r); border: 1px solid var(--line-strong); overflow: hidden; cursor: pointer;
+               background: repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 10px 10px; box-shadow: var(--shadow-sm); }
+  #cswatch { position: absolute; inset: 0; }
+  #cpick { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; border: 0; padding: 0; }
+  #cq { flex: 1; min-width: 0; height: 34px; padding: 0 12px; border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--card);
+        color: var(--text); font: 13px var(--mono); box-shadow: var(--shadow-sm); }
+  #csum { margin-top: 10px; font-size: 12px; color: var(--muted); min-height: 16px; }
+  #csum b { color: var(--text); }
+  .cswatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; border: 1px solid rgba(0,0,0,.25); vertical-align: -1px; margin-right: 3px; }
+  .cval { font: 11.5px/1.5 var(--mono); }
+  .chidden { font-size: 11px; font-weight: 600; color: #b54708; background: #fffaeb; border: 1px solid #fedf89; border-radius: var(--r-sm); padding: 0 6px; }
+  .cpages { font-size: 11px; color: var(--muted); }
+  .cpages b { color: #b54708; }
+  .fhit.dyngroup { box-shadow: inset 3px 0 0 var(--accent), var(--shadow-sm); }
 
   /* ================= image panel (right edge) ================= */
   #pic { flex: none; width: 250px; position: relative; overflow: hidden; background: var(--sunken); border-left: 1px solid var(--line); }
@@ -315,6 +336,7 @@
         <button class="tab" data-tab="nbh" role="tab" hidden>Neighborhoods</button>
         <button class="tab" data-tab="agent" role="tab" hidden>Agents</button>
         <button class="tab" data-tab="search" role="tab">Keyword search</button>
+        <button class="tab" data-tab="color" role="tab">Color search</button>
       </div>
       <div class="toolbar" data-pane="seo nbh agent">
         <label><input type="checkbox" id="selall" disabled> Select all</label>
@@ -349,6 +371,24 @@
         </div>
         <div id="fsum"></div>
       </div>
+      <div id="cfinder" data-pane="color" hidden>
+        <div class="frow">
+          <div class="cwrap">
+            <label class="cpickwrap" title="Pick a colour"><span id="cswatch"></span><input type="color" id="cpick" value="#002349"></label>
+            <input id="cq" placeholder="Old colour: #002349, 002349, rgb(0, 35, 73) or a colour name" autocomplete="off" spellcheck="false">
+          </div>
+          <select id="ctol" title="How close a shade must be to count">
+            <option value="0">Exact match</option>
+            <option value="2">Almost exact (±2)</option>
+            <option value="8">Close shades (±8)</option>
+            <option value="20">Similar shades (±20)</option>
+          </select>
+          <label title="Also scan the template's design stylesheet (styles.luxurypresence.com). These are template defaults, usually not editable per site."><input type="checkbox" id="cdesign"> Include template stylesheet</label>
+          <span class="grow"></span>
+          <button id="ccopy" disabled title="Copy a checklist of every place this colour is used">Copy report</button>
+        </div>
+        <div id="csum"></div>
+      </div>
     </header>
     <div id="layout">
       <div class="panebar" data-pane="seo"><span class="pbtitle">Menu, navbar &amp; footer pages</span><span class="pbtime" id="pt-seo"></span><button class="pbrefresh" data-refresh="seo" disabled title="Re-audit only the pages on this tab"><svg class="ico"><use href="#i-refresh"/></svg>Refresh</button></div>
@@ -358,6 +398,7 @@
       <div class="panebar" data-pane="agent" hidden><span class="pbtitle">Agent pages</span><span class="pbtime" id="pt-agent"></span><button class="pbrefresh" data-refresh="agent" title="Re-read the sitemap and re-audit only the agent pages"><svg class="ico"><use href="#i-refresh"/></svg>Refresh</button></div>
       <div id="res-agent" data-pane="agent" hidden></div>
       <div id="fres" data-pane="search" hidden></div>
+      <div id="cres" data-pane="color" hidden></div>
     </div>
   </main>
   <aside id="pic">

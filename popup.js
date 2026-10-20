@@ -220,6 +220,9 @@ async function audit(link, probeTitle) {
     const contact = [...doc.querySelectorAll('a[href^="mailto:" i], a[href^="tel:" i], a[href^="sms:" i]')]
       .map(a => ({ href: a.getAttribute('href'), text: a.textContent }));
     // Visible text of the page, kept for the sitewide word search.
+    // Colours first: they live in the <style> blocks that are stripped for keyword search below.
+    row.colorParts = collectColorParts(doc, elementMap);
+    row.designCss = [...doc.querySelectorAll('link[rel~="stylesheet"][href]')].map(l => l.href).find(h => /styles\.luxury(presence|coders)\.com\//.test(h)) || '';
     doc.querySelectorAll('script, style, noscript, template').forEach(n => n.remove());
     // Testimonial sections (sliders, lists, cards, modals) are always left out of the word search.
     // Skips <body>/<html> and any wrapper that also holds the header, footer or nav, so a class like
@@ -228,8 +231,8 @@ async function audit(link, probeTitle) {
       if (n === doc.body || n === doc.documentElement || n.querySelector('header, footer, nav, #global-navbar, #global-sidemenu')) return;
       n.remove();
     });
-    row.parts = collectSearchParts(doc, false);
-    row.visibleParts = collectSearchParts(doc, true);
+    row.parts = collectSearchParts(doc, false, elementMap);
+    row.visibleParts = collectSearchParts(doc, true, elementMap);
     row.detailLinks = detailLinksIn(doc, link.href);
     if (link.useH1) row.label = clean(doc.querySelector('h1')?.textContent).slice(0, 60) || row.label;   // agent / neighborhood name
     // For the open page, also use the live DOM (covers contact links added by JavaScript).
@@ -593,6 +596,44 @@ async function auditGroupInner(key) {
 
 Object.entries(dyn).forEach(([key, g]) => g.toggle.addEventListener('change', () => setGroup(key, g.toggle.checked)));
 
+// ---------- official LP element names (same source as the LP Identifier extension) ----------
+// LP marks every block with data-el-id (section[data-el-id], #global-navbar, #global-sidemenu, #global-footer, modals).
+// The LP Identifier maps those IDs to element + template names in data/element-data.json, which it exposes to web pages.
+// 1) read it live from the installed LP Identifier (fetched from inside the audited tab, so it is always current)
+// 2) otherwise use the snapshot bundled with this extension (data/lp-elements.json)
+const LP_IDENTIFIER_ID = 'pcknhfiipohlegjbokamnifkafoijonh';
+let elementMap = null;
+let elementMapPromise = null;
+function getElementMap(tabId) {
+  if (!elementMapPromise) elementMapPromise = (async () => {
+    try {
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        args: [LP_IDENTIFIER_ID],
+        func: async id => {
+          try {
+            const res = await fetch(`chrome-extension://${id}/data/element-data.json`);
+            if (!res.ok) return null;
+            const map = {};
+            for (const e of (await res.json()).elements || []) {
+              if (e.elementID) map[e.elementID] = [String(e.elementName || '').trim(), String(e.templateName || '').trim()];
+            }
+            return map;
+          } catch { return null; }
+        }
+      });
+      if (r?.result && Object.keys(r.result).length) return { map: r.result, source: 'LP Identifier (live)' };
+    } catch { /* LP Identifier not installed, or the page can't be scripted */ }
+    try {
+      const j = await (await fetch(chrome.runtime.getURL('data/lp-elements.json'))).json();
+      return { map: j.elements || {}, source: 'bundled snapshot' };
+    } catch {
+      return { map: {}, source: 'none' };
+    }
+  })();
+  return elementMapPromise;
+}
+
 async function run(opts = {}) {
   const mainOnly = !!opts.mainOnly;   // per-tab refresh of the SEO audit tab leaves the group tabs alone
   paneBtn('seo').disabled = true;
@@ -618,6 +659,7 @@ async function run(opts = {}) {
   }
   if (data.error) { statusEl.textContent = data.error; rerunBtn.disabled = paneBtn('seo').disabled = false; mainBusy = false; return; }
   live = data;
+  elementMap = (await getElementMap(tab.id)).map;   // official LP element names, keyed by data-el-id
   siteOrigin = data.origin;
 
   $('site').textContent = new URL(data.origin).host;
@@ -686,27 +728,38 @@ function snippet(re, s) {
 //   visibleOnly = false → everything in the HTML: any text, alt text, title/aria attributes, link URLs, meta tags
 //   visibleOnly = true  → only text inside text elements (h1–h6, p, span, li, ol, links, buttons …), modals included
 // Testimonial sections and slider clones are always skipped.
-function collectSearchParts(doc, visibleOnly) {
-  doc = doc || document;
+// Shared element labelling for keyword and colour search: official LP name via data-el-id, else a class-name guess.
+function makeLabeler(doc, elMap) {
   const body = doc.body;
-  const parts = [];
-  if (!body) return parts;
-  const clean = s => (s || '').replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
-
+  const clean = s => (s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
   // ---- component naming: <section id="section-…"> <div class="gallery-component …"> ----
   const GENERIC = /^(section|redesign|parallax|hidable|modal|collection|lp-[\w-]*|js-[\w-]*|is-[\w-]*|video-wrapper|overlay-component|height-class-[\w-]*)$/i;
   const ABBR = { hv: 'home valuation', ig: 'Instagram', cta: 'CTA' };
   const humanize = c => c.split(/[-_]+/).map(w => ABBR[w.toLowerCase()] || w).join(' ').replace(/^\w/, ch => ch.toUpperCase());
   const secCache = new Map();
   const componentOf = el => {
+    // 1) Official LP element name: like the LP Identifier, read data-el-id on the section / global element
+    //    (section[data-el-id], #global-navbar, #global-sidemenu, #global-footer, modals) and look it up.
+    const host = elMap && el.closest("[data-el-id]");
+    const known = host && elMap[host.getAttribute("data-el-id")];
+    if (known) {
+      if (secCache.has(host)) return secCache.get(host);
+      const isSection = host.matches("section");
+      const info = { name: known[0] || "Element", template: known[1] || "", elId: host.getAttribute("data-el-id"), id: host.id,
+                     heading: isSection ? clean(host.querySelector("h1, h2, h3")?.textContent).slice(0, 40) : "", global: !isSection };
+      secCache.set(host, info);
+      return info;
+    }
+    // 2) Fallback: guess from the class names
     const sec = el.closest('section[id^="section-"]');
     if (!sec) {
       // Site-wide parts: the same on every page, so search results show them only once.
       if (el.closest('#global-navbar, header')) return { name: 'Header / navbar', global: true };
       if (el.closest('#global-sidemenu')) return { name: 'Side menu', global: true };
       if (el.closest('#lp-consent-banner, [class*="consent" i]')) return { name: 'Cookie banner', global: true };
-      if (el.closest('footer, [class*="footer" i]')) return { name: 'Footer', global: true };
+      if (el.closest('#global-footer, footer')) return { name: 'Footer', global: true };
       // Outermost popup/widget, so inner ids like "qualifying-questions-modal-title" still name the whole popup.
+      // Checked before the loose footer match: popups contain classes like "contact-form__footer".
       let holder = null;
       for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
         if (e.matches('[id^="global-"], [id*="modal" i], [class*="floating-contact" i]')) holder = e;
@@ -717,6 +770,7 @@ function collectSearchParts(doc, visibleOnly) {
         const name = humanize(raw.replace(/^(modal-)?(global-)?/i, '').replace(/-?modal$/i, ''));
         return { name: name + (isPopup ? ' (popup)' : ''), id: holder.id, global: true };
       }
+      if (el.closest('[class*="footer" i]')) return { name: 'Footer', global: true };
       return { name: 'Page (outside sections)' };
     }
     if (secCache.has(sec)) return secCache.get(sec);
@@ -747,6 +801,18 @@ function collectSearchParts(doc, visibleOnly) {
     }
     return out.join(' › ');
   };
+
+  return { componentOf, pathOf };
+}
+
+function collectSearchParts(doc, visibleOnly, elMap) {
+  doc = doc || document;
+  const body = doc.body;
+  const parts = [];
+  if (!body) return parts;
+  const clean = s => (s || '').replace(/[​-‍﻿]/g, '').replace(/\s+/g, ' ').trim();
+
+  const { componentOf, pathOf } = makeLabeler(doc, elMap);
 
   // ---- what to skip ----
   const testiSel = '[class*="testimonial" i], [id*="testimonial" i]';
@@ -804,7 +870,7 @@ function hitHtml(url, h, re, once) {
   const open = VISIBLE_WHERE.has(h.where)
     ? `<a class="fopen" href="${esc(url + '#:~:text=' + encodeURIComponent(once.exec(h.text)[0]))}" target="_blank" title="Open the page scrolled to this text">↗</a>` : '';
   const c = h.comp;
-  const comp = c ? `<span class="fsec" title="${esc(c.id ? `#${c.id}${c.cls ? ' › div.' + c.cls : ''}` : c.name)}">${esc(c.name)}</span>${c.heading ? ` <span class="fhead">“${esc(c.heading)}”</span>` : ''} › ` : '';
+  const comp = c ? `<span class="fsec" title="${esc([c.template && "Template: " + c.template, c.elId && "Element ID: " + c.elId, c.id && "#" + c.id, c.cls && "div." + c.cls].filter(Boolean).join("\n") || c.name)}">${esc(c.name)}</span>${c.template ? ` <span class="ftpl">${esc(c.template)}</span>` : ""}${c.heading ? ` <span class="fhead">“${esc(c.heading)}”</span>` : ""} › ` : "";
   const onPages = h.pages ? ` <span class="fcount" title="${esc(h.pages.join('\n'))}">· same on ${h.pages.length} page${h.pages.length === 1 ? '' : 's'}</span>` : '';
   return `<div class="fitem">${comp}<span class="fwhere">${esc(h.where)}</span>${h.path ? ` in <code class="fel" title="${esc(h.path)}">${esc(h.path)}</code>` : ''}${h.n > 1 ? ` <span class="fcount">×${h.n}</span>` : ''}${onPages} ${open}
     <div class="fsnip">${snippet(re, h.text)}</div></div>`;
@@ -880,7 +946,7 @@ function runFind() {
     : `Not found on any of the ${list.length} audited pages.`) +
     ` · ${everything ? 'searching everything (alt text, attributes, link URLs, meta tags, loose text)' : 'visible text only (headings, paragraphs, spans, lists, links, buttons)'}`;
 }
-function refreshFind() { if (activeTab === 'search') runFind(); }
+function refreshFind() { if (activeTab === 'search') runFind(); else if (activeTab === 'color') runColor(); }
 
 // ---------- tabs: SEO audit / Keyword search ----------
 let activeTab = 'seo';
@@ -890,13 +956,14 @@ function showTab(name) {
   document.querySelectorAll('[data-pane]').forEach(p => { p.hidden = !p.dataset.pane.split(" ").includes(name); });
   $('layout').scrollTop = 0;
   if (name === 'search') { $('fq').focus(); runFind(); }
+  else if (name === 'color') { $('cq').focus(); runColor(); }
   else { updateSummary(); updateSelection(); }   // summary, Select all and copy follow the tab
 }
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
 let findTimer;
 ['input', 'change'].forEach(ev => $('finder').addEventListener(ev, () => { clearTimeout(findTimer); findTimer = setTimeout(runFind, 150); }));
-$('fres').addEventListener('click', e => {
+function resultsClick(e) {
   if (e.target.closest('a')) return;   // the ↗ link opens the page instead
   // "Show all N elements" expands / collapses the rest of that page's matches
   const more = e.target.closest('.fmore-btn');
@@ -915,7 +982,334 @@ $('fres').addEventListener('click', e => {
   showTab(pane ? pane.dataset.pane.split(' ')[0] : 'seo');
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
-});
+}
+// Same behaviour for keyword and colour results: "Show all", ↗ links, click the page name to jump to its card.
+$('fres').addEventListener('click', resultsClick);
+$('cres').addEventListener('click', resultsClick);
+
+// ================= colour search =================
+// Where LP sites keep colours (checked on real sites):
+//   <style id="website-css">       site palette (:root --primary-dark …) and site-wide rules
+//   <style id="custom-style-css">  style presets (hyperlink / button / social icon styles)
+//   <style id="global-css">        global body styles
+//   <style id="page-css">          per-element settings + custom CSS, keyed by #section-<id>
+//   style="" attributes            element colour pickers (--bgColor, --textColor …) and hard-coded styles
+//   fill / stroke attributes       SVG icons and logos
+// Every colour is normalised to RGBA, so #023, #002349, rgb(0 35 73), rgba(0,35,73,.5) and hsl(…) all match.
+
+const NAMED_COLORS = 'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen'.split(' ');
+const NAMED_RE = new RegExp(`(?<![\\w-])(${NAMED_COLORS.join('|')})(?![\\w-])`, 'gi');
+const COLOR_PROP = /color|background|border|fill|stroke|outline|shadow|caret|column-rule|text-decoration|^--/i;
+const _cctx = document.createElement('canvas').getContext('2d');
+
+// Any CSS colour → [r, g, b, a] (null if it isn't a colour).
+function toRGBA(token) {
+  let v = null;
+  for (const probe of ['#000001', '#000002']) {
+    _cctx.fillStyle = probe;
+    _cctx.fillStyle = token;
+    if (_cctx.fillStyle !== probe) { v = _cctx.fillStyle; break; }
+  }
+  if (!v) return null;
+  if (v[0] === '#') return [parseInt(v.slice(1, 3), 16), parseInt(v.slice(3, 5), 16), parseInt(v.slice(5, 7), 16), 1];
+  const m = v.match(/[\d.]+/g);
+  return m ? [+m[0], +m[1], +m[2], m[3] !== undefined ? +m[3] : 1] : null;
+}
+const rgbHex = c => '#' + c.slice(0, 3).map(n => Math.round(n).toString(16).padStart(2, '0')).join('');
+
+// Colour tokens inside one CSS value.
+function extractColors(prop, value) {
+  const out = [], seen = new Set();
+  const push = t => {
+    const k = t.toLowerCase();
+    if (seen.has(k)) return;
+    const c = toRGBA(t);
+    if (c) { seen.add(k); out.push({ t, c }); }
+  };
+  (value.match(/#[0-9a-f]{3,8}(?![\w-])/gi) || []).forEach(t => { if (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(t)) push(t); });
+  (value.match(/(?:rgba?|hsla?)\([^()]*\)/gi) || []).forEach(t => { if (!/\bfrom\b|var\(/i.test(t)) push(t); });  // relative colours: their #hex is caught above
+  if (COLOR_PROP.test(prop)) (value.match(NAMED_RE) || []).forEach(push);
+  return out;
+}
+
+// Walk every declaration in a CSS text: cb(selector, property, value, media).
+// LP stores some colours as split HSL custom properties (--fontColor_H / _S / _L); those are recombined.
+function walkCss(text, cb) {
+  let sheet;
+  try {
+    sheet = new CSSStyleSheet();
+    sheet.replaceSync(text.replace(/@import[^;]+;/gi, ''));
+  } catch { return; }
+  const visit = (rules, media) => {
+    for (const r of rules) {
+      if (r.style && r.selectorText !== undefined) {
+        const hsl = {};
+        for (let i = 0; i < r.style.length; i++) {
+          const prop = r.style[i], value = r.style.getPropertyValue(prop).trim();
+          const m = prop.match(/^(--[\w-]+?)_([HSL])$/);
+          if (m) (hsl[m[1]] = hsl[m[1]] || {})[m[2]] = value;
+          cb(r.selectorText, prop, value, media);
+        }
+        for (const [base, v] of Object.entries(hsl)) {
+          if (v.H !== undefined && v.S !== undefined && v.L !== undefined) cb(r.selectorText, `${base} (H/S/L)`, `hsl(${parseFloat(v.H) || 0}, ${v.S}, ${v.L})`, media);
+        }
+      }
+      if (r.cssRules) visit(r.cssRules, r.media ? r.media.mediaText : (r.conditionText || media));
+    }
+  };
+  visit(sheet.cssRules, '');
+}
+
+const SITE_STYLE_BLOCKS = { 'website-css': 'Site palette & styles', 'custom-style-css': 'Style presets', 'global-css': 'Site global CSS' };
+
+// Every colour on one page, labelled with its LP element. Runs before scripts/styles are stripped for keyword search.
+function collectColorParts(doc, elMap) {
+  const parts = [];
+  if (!doc.body) return parts;
+  const { componentOf, pathOf } = makeLabeler(doc, elMap);
+  const styles = [...doc.querySelectorAll('style')];
+
+  // Sections switched off by the page's own CSS (#section-…{display:none}).
+  const hiddenIds = new Set();
+  styles.forEach(st => walkCss(st.textContent, (sel, prop, value) => {
+    const m = sel.trim().match(/^#(section-[0-9a-f-]{36})$/i);
+    if (m && ((prop === 'display' && /none/.test(value)) || (prop === 'visibility' && /hidden/.test(value)))) hiddenIds.add(m[1]);
+  }));
+  const isHidden = el => {
+    for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+      if (e.hasAttribute('hidden') || hiddenIds.has(e.id)) return true;
+      if (/(?:^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)/i.test(e.getAttribute('style') || '')) return true;
+      if (e.classList && ['d-none', 'is-hidden', 'hidden'].some(c => e.classList.contains(c))) return true;
+    }
+    return false;
+  };
+  const add = (src, where, prop, value, el, extra = {}) => {
+    const colors = extractColors(prop, value);
+    if (!colors.length) return;
+    const comp = extra.comp || (el ? componentOf(el) : null);
+    parts.push({
+      s: src, w: where, p: prop, v: value.length > 260 ? value.slice(0, 257) + '…' : value, m: extra.media || '',
+      c: colors, comp, site: !!extra.site,
+      h: el && !comp?.global ? isHidden(el) : false,
+      absent: !!extra.absent
+    });
+  };
+
+  // 1) <style> blocks
+  styles.forEach(st => {
+    const siteLabel = SITE_STYLE_BLOCKS[st.id];
+    const src = siteLabel || (st.id === 'page-css' ? 'Element styles (page CSS)' : 'Page <style> block');
+    walkCss(st.textContent, (sel, prop, value, media) => {
+      if (siteLabel) return add(src, sel, prop, value, null, { site: true, comp: { name: siteLabel, global: true }, media });
+      // tie the rule to its element by the first #id in the selector (#section-…, #global-navbar, #modal-…)
+      const id = (sel.match(/#([A-Za-z][\w-]*)/) || [])[1];
+      const el = id && doc.getElementById(id);
+      if (el) return add(src, sel, prop, value, el, { media });
+      add(src, sel, prop, value, null, {
+        media, absent: !!id,
+        comp: id ? { name: 'Element not on this page', heading: '#' + id } : { name: 'Page custom CSS (not tied to an element)' }
+      });
+    });
+  });
+
+  // 2) style="" attributes: element colour settings (--bgColor …) and hard-coded inline styles
+  doc.querySelectorAll('[style]').forEach(el => {
+    (el.getAttribute('style') || '').split(/;(?![^(]*\))/).forEach(decl => {
+      const i = decl.indexOf(':');
+      if (i < 0) return;
+      const prop = decl.slice(0, i).trim(), value = decl.slice(i + 1).trim();
+      if (!prop || !value) return;
+      add(prop.startsWith('--') ? 'Element setting' : 'Inline style', pathOf(el) || el.tagName.toLowerCase(), prop, value, el);
+    });
+  });
+
+  // 3) colour attributes (SVG fill/stroke, legacy color/bgcolor)
+  doc.querySelectorAll('[fill], [stroke], [stop-color], [bgcolor], font[color]').forEach(el => {
+    for (const a of ['fill', 'stroke', 'stop-color', 'bgcolor', 'color']) {
+      const v = el.getAttribute(a);
+      if (v) add(el.closest('svg') ? 'SVG attribute' : 'HTML attribute', pathOf(el) || el.tagName.toLowerCase(), a, v, el);
+    }
+  });
+  return parts;
+}
+
+// The template's design stylesheet (styles.luxurypresence.com/<design>/index.css): only when asked for, fetched once.
+const designCssCache = new Map();
+function designCssParts(url) {
+  if (!designCssCache.has(url)) designCssCache.set(url, (async () => {
+    try {
+      const text = await (await fetch(url)).text();
+      const slug = (new URL(url).pathname.split('/')[1] || '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const parts = [];
+      walkCss(text, (sel, prop, value, media) => {
+        const colors = extractColors(prop, value);
+        if (colors.length) parts.push({ s: 'Template design stylesheet', w: sel, p: prop, v: value.length > 260 ? value.slice(0, 257) + '…' : value, m: media || '',
+                                        c: colors, comp: { name: 'Template design stylesheet', template: slug, global: true }, site: true });
+      });
+      return parts;
+    } catch { return []; }
+  })());
+  return designCssCache.get(url);
+}
+
+function parseColorInput(s) {
+  s = (s || '').trim();
+  if (!s) return null;
+  if (/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s)) s = '#' + s;   // "002349" without the #
+  return toRGBA(s);
+}
+
+function colorValueHtml(p, isMatch) {
+  // highlight the matching tokens and show a swatch for each colour found in the value
+  let html = esc(p.v);
+  const toks = [...p.c].sort((a, b) => b.t.length - a.t.length);
+  for (const k of toks) {
+    const re = new RegExp(k.t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    html = html.replace(re, m => `<span class="cswatch" style="background:${esc(k.t)}"></span>${isMatch(k.c) ? `<mark>${m}</mark>` : m}`);
+  }
+  return html;
+}
+
+function compLabel(c) {
+  if (!c) return '';
+  return `<span class="fsec" title="${esc([c.template && 'Template: ' + c.template, c.elId && 'Element ID: ' + c.elId, c.id && '#' + c.id, c.cls && 'div.' + c.cls].filter(Boolean).join('\n') || c.name)}">${esc(c.name)}</span>` +
+    `${c.template ? ` <span class="ftpl">${esc(c.template)}</span>` : ''}${c.heading ? ` <span class="fhead">“${esc(c.heading)}”</span>` : ''} › `;
+}
+
+function colorHitHtml(p, isMatch, note = '') {
+  const same = p.comp && p.comp.name === p.s;   // site settings: the source already is the label
+  return `<div class="fitem">${same ? '' : compLabel(p.comp)}<span class="${same ? 'fsec' : 'fwhere'}">${esc(p.s)}</span>` +
+    ` <code class="fel">${esc(p.p)}</code> in <code class="fel" title="${esc(p.w)}">${esc(p.w.length > 90 ? p.w.slice(0, 87) + '…' : p.w)}</code>` +
+    `${p.m ? ` <span class="ftpl" title="Media query">@${esc(p.m)}</span>` : ''}${p.h ? ' <span class="chidden" title="This element is hidden on the page (hidden attribute, display:none, or switched off in the page CSS)">hidden</span>' : ''}${note}` +
+    `<div class="fsnip cval">${colorValueHtml(p, isMatch)}</div></div>`;
+}
+
+function colorCard(title, sub, url, items, isMatch, extraClass = '') {
+  const el = document.createElement('div');
+  el.className = 'fhit ' + extraClass;
+  if (url) el.dataset.url = url;
+  const html = items.map(x => colorHitHtml(x.p, isMatch, x.note || ''));
+  el.innerHTML = `<div class="fh"><b>${esc(title)}</b> <span class="fpath">${esc(sub)}</span> <span class="ftag body">${items.length} place${items.length === 1 ? '' : 's'}</span></div>
+    ${html.slice(0, MAX_HITS_SHOWN).join('')}
+    ${html.length > MAX_HITS_SHOWN ? `<div class="fmore" hidden>${html.slice(MAX_HITS_SHOWN).join('')}</div>
+      <button class="fmore-btn" data-more="${html.length - MAX_HITS_SHOWN}">Show all ${html.length} places (+${html.length - MAX_HITS_SHOWN} more)</button>` : ''}`;
+  return el;
+}
+
+let lastColorReport = '';
+let colorRun = 0;
+async function runColor() {
+  const run = ++colorRun;
+  const res = $('cres'), sum = $('csum');
+  const target = parseColorInput($('cq').value);
+  $('cswatch').style.background = target ? `rgba(${target.join(',')})` : 'transparent';
+  if (target) $('cpick').value = rgbHex(target);
+  res.innerHTML = '';
+  lastColorReport = '';
+  $('ccopy').disabled = true;
+  if (!target) { sum.textContent = $('cq').value.trim() ? 'Not a colour. Use #002349, 002349, rgb(0, 35, 73), hsl(…) or a colour name.' : 'Enter the old colour to find every place it is used.'; return; }
+  const list = allRows().filter(r => !r.probe && r.colorParts);
+  if (!list.length) { sum.textContent = 'Run the audit first — nothing to search yet.'; return; }
+
+  const tol = +$('ctol').value;
+  const isMatch = c => Math.max(Math.abs(c[0] - target[0]), Math.abs(c[1] - target[1]), Math.abs(c[2] - target[2])) <= tol;   // alpha ignored: rgba(…, .5) of the same colour still counts
+  const hits = p => p.c.some(k => isMatch(k.c));
+  const pathOfUrl = u => new URL(u).pathname || '/';
+
+  // site-wide settings + global elements (header, side menu, footer, popups): identical on every page → listed once
+  const shared = new Map();
+  const addShared = (p, page) => {
+    const key = [p.s, p.comp?.name, p.w, p.p, p.v].join('\u0001');
+    const e = shared.get(key) || { p, pages: new Set() };
+    e.pages.add(page);
+    shared.set(key, e);
+  };
+  if ($('cdesign').checked) {
+    const url = rows.find(r => r.designCss)?.designCss;
+    if (url) {
+      sum.textContent = 'Reading the template design stylesheet…';
+      const parts = await designCssParts(url);
+      if (run !== colorRun) return;
+      parts.filter(hits).forEach(p => addShared(p, 'template'));
+    }
+  }
+
+  const report = [];
+  const pageCards = [];
+  let pageHits = 0, pagesWith = 0;
+  for (const r of rows.filter(r => !r.probe && r.colorParts)) {
+    const mine = [];
+    for (const p of r.colorParts) {
+      if (!hits(p)) continue;
+      if (p.site || p.comp?.global) addShared(p, pathOfUrl(r.url));
+      else mine.push({ p });
+    }
+    if (!mine.length) continue;
+    pagesWith++;
+    pageHits += mine.length;
+    pageCards.push(colorCard(r.label, pathOfUrl(r.url), r.url, mine, isMatch));
+    report.push(`\n${r.label} (${r.url})`, ...mine.map(x => `  - ${x.p.comp?.name || ''}${x.p.comp?.template ? ' [' + x.p.comp.template + ']' : ''} › ${x.p.s}: ${x.p.p} in ${x.p.w} = ${x.p.v}${x.p.h ? '  (hidden)' : ''}`));
+  }
+
+  // Neighborhood / agent pages share one page template, but their content differs per page: an element can be
+  // shown on one page and hidden or missing on another. One card per group, each place says where it applies.
+  const groupCards = [];
+  for (const [gkey, g] of Object.entries(dyn)) {
+    const gl = g.rows.filter(r => r.colorParts);
+    if (!g.on || !gl.length) continue;
+    const agg = new Map();
+    for (const r of gl) {
+      for (const p of r.colorParts) {
+        if (!hits(p)) continue;
+        if (p.site || p.comp?.global) { addShared(p, pathOfUrl(r.url)); continue; }
+        if (p.absent) continue;   // CSS left for an element this page doesn't have: counted as "not on" below
+        const key = [p.comp?.name, p.comp?.template, p.s, p.p, p.w.replace(/section-[0-9a-f-]{36}/gi, 'section'), p.v].join('\u0001');
+        const e = agg.get(key) || { p, shown: [], hidden: [] };
+        (p.h ? e.hidden : e.shown).push(r.label);
+        agg.set(key, e);
+      }
+    }
+    if (!agg.size) continue;
+    const items = [...agg.values()].map(e => {
+      const absent = gl.length - e.shown.length - e.hidden.length;
+      const note = ` <span class="cpages" title="${esc(['Shown on: ' + (e.shown.join(', ') || '—'), e.hidden.length ? 'Hidden on: ' + e.hidden.join(', ') : '', absent ? 'Not on the other ' + absent + ' page(s)' : ''].filter(Boolean).join('\n'))}">` +
+        `shown on ${e.shown.length}/${gl.length}${e.hidden.length ? ` · <b>hidden on ${e.hidden.length}</b>` : ''}${absent ? ` · not on ${absent}` : ''}</span>`;
+      return { p: { ...e.p, h: false }, note, e, absent };
+    });
+    groupCards.push(colorCard(`${gkey} pages`, `${gl.length} pages · ${items.length} place${items.length === 1 ? '' : 's'}`, null, items, isMatch, 'dyngroup'));
+    pageHits += items.length;
+    report.push(`\n${gkey} pages (${gl.length})`, ...items.map(x => `  - ${x.p.comp?.name || ''}${x.p.comp?.template ? ' [' + x.p.comp.template + ']' : ''} › ${x.p.s}: ${x.p.p} in ${x.p.w} = ${x.p.v}  — shown on ${x.e.shown.length}/${gl.length}${x.e.hidden.length ? ', hidden on: ' + x.e.hidden.join(', ') : ''}${x.absent ? ', not on ' + x.absent + ' page(s)' : ''}`));
+  }
+
+  if (run !== colorRun) return;
+  const sharedItems = [...shared.values()].map(e => ({ p: e.p, note: e.pages.has('template') ? '' : ` <span class="cpages" title="${esc([...e.pages].join('\n'))}">same on ${e.pages.size} page${e.pages.size === 1 ? '' : 's'}</span>` }));
+  sharedItems.sort((a, b) => (b.p.site - a.p.site));
+  if (sharedItems.length) {
+    res.appendChild(colorCard('Site-wide settings & shared elements', 'palette · style presets · header · side menu · footer · popups', null, sharedItems, isMatch, 'shared'));
+    report.unshift('Site-wide settings & shared elements', ...sharedItems.map(x => `  - ${x.p.comp?.name || ''}${x.p.comp?.template ? ' [' + x.p.comp.template + ']' : ''} › ${x.p.s}: ${x.p.p} in ${x.p.w} = ${x.p.v}`));
+  }
+  pageCards.forEach(c => res.appendChild(c));
+  groupCards.forEach(c => res.appendChild(c));
+
+  const total = sharedItems.length + pageHits;
+  const hex = rgbHex(target).toUpperCase();
+  sum.innerHTML = total
+    ? `<b>${total}</b> place${total === 1 ? '' : 's'} use ${esc(hex)}${tol ? ' (or a near shade)' : ''}: ${sharedItems.length} site-wide · ${pagesWith} page${pagesWith === 1 ? '' : 's'}` +
+      `${groupCards.length ? ` · ${groupCards.length} neighborhood/agent group${groupCards.length === 1 ? '' : 's'}` : ''}`
+    : `${esc(hex)} isn't used on any of the ${list.length} audited pages${$('cdesign').checked ? ' or in the template stylesheet' : ''}.`;
+  if (total) {
+    lastColorReport = `Colour ${hex}${tol ? ` (±${tol})` : ''} — ${total} place(s)\n${report.join('\n')}`;
+    $('ccopy').disabled = false;
+  }
+}
+
+let colorTimer;
+['input', 'change'].forEach(ev => $('cfinder').addEventListener(ev, e => {
+  if (e.target.id === 'cpick') $('cq').value = $('cpick').value;
+  clearTimeout(colorTimer);
+  colorTimer = setTimeout(runColor, 200);
+}));
+$('ccopy').addEventListener('click', () => copyWithFeedback($('ccopy'), () => 'Copy report', lastColorReport));
 
 // ---------- random SFW anime image ----------
 const DANBOORU = 'https://danbooru.donmai.us';
