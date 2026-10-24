@@ -214,6 +214,7 @@ async function audit(link, probeTitle) {
     });
     row.status = res.status;
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    decodeCfEmails(doc);   // Cloudflare hides emails as "[email protected]" in the served HTML
     row.title = clean(doc.querySelector('title')?.textContent);
     row.description = clean(doc.querySelector('meta[name="description" i]')?.getAttribute('content'));
 
@@ -222,6 +223,7 @@ async function audit(link, probeTitle) {
     // Visible text of the page, kept for the sitewide word search.
     // Colours first: they live in the <style> blocks that are stripped for keyword search below.
     row.colorParts = collectColorParts(doc, elementMap);
+    row.linkInv = collectLinkInventory(doc, link.href, elementMap);   // for "Check links"
     row.designCss = [...doc.querySelectorAll('link[rel~="stylesheet"][href]')].map(l => l.href).find(h => /styles\.luxury(presence|coders)\.com\//.test(h)) || '';
     doc.querySelectorAll('script, style, noscript, template').forEach(n => n.remove());
     // Testimonial sections (sliders, lists, cards, modals) are always left out of the word search.
@@ -412,41 +414,103 @@ async function copyWithFeedback(btn, label, text) {
   btn.textContent = 'Copied!';
   setTimeout(() => (btn.textContent = label()), 1500);
 }
-// ---------- template text added after "Copy selected" (editable, saved permanently) ----------
+// ---------- notes added after "Copy selected" (several saved notes, pick one; all saved permanently) ----------
 const DEFAULT_TEMPLATE = 'Analyze these seo titles and description, find the pattern on how they were formed,. the charater reqirement is 46-60 in title and 146-160 in description. And then after analyzing, build me seo title and description for these pages: ';
-let copyTemplate = DEFAULT_TEMPLATE;
-chrome.storage.local.get('copyTemplate').then(s => {
-  if (typeof s.copyTemplate === 'string') copyTemplate = s.copyTemplate;
-  $('tpltext').value = copyTemplate;
+let notes = [];            // [{ id, name, text }]
+let activeNoteId = '';     // '' = add no note
+let editNoteId = '';       // note shown in the editor
+const newNoteId = () => 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const noteById = id => notes.find(n => n.id === id);
+
+chrome.storage.local.get(['copyNotes', 'activeNoteId', 'copyTemplate']).then(s => {
+  if (Array.isArray(s.copyNotes) && s.copyNotes.length) {
+    notes = s.copyNotes;
+    activeNoteId = s.activeNoteId ?? notes[0].id;
+  } else {
+    // first run after the update: the old single template becomes note 1
+    notes = [{ id: newNoteId(), name: 'SEO analysis prompt', text: typeof s.copyTemplate === 'string' ? s.copyTemplate : DEFAULT_TEMPLATE }];
+    activeNoteId = notes[0].id;
+    persistNotes();
+  }
+  editNoteId = noteById(activeNoteId) ? activeNoteId : notes[0]?.id || '';
+  renderNotes();
 });
-let tplTimer;
-$('tpltext').addEventListener('input', () => {
-  copyTemplate = $('tpltext').value;
-  $('tplsaved').textContent = 'Saving…';
-  clearTimeout(tplTimer);
-  tplTimer = setTimeout(async () => {
-    await chrome.storage.local.set({ copyTemplate });
-    $('tplsaved').textContent = 'Saved ✓';
-  }, 300);
-});
+
+function persistNotes(msg) {
+  Promise.resolve(chrome.storage.local.set({ copyNotes: notes, activeNoteId })).then(() => { if (msg) $('tplsaved').textContent = msg; });
+}
+
+function renderNotes() {
+  const opts = notes.map(n => `<option value="${esc(n.id)}">${esc(n.name || 'Untitled note')}</option>`).join('');
+  $('notesel').innerHTML = `<option value="">No note</option>${opts}`;
+  $('notesel').value = noteById(activeNoteId) ? activeNoteId : '';
+  $('noteedit').innerHTML = opts;
+  const n = noteById(editNoteId);
+  $('noteedit').value = n ? n.id : '';
+  $('notename').value = n ? n.name : '';
+  $('tpltext').value = n ? n.text : '';
+  $('notename').disabled = $('tpltext').disabled = $('notedel').disabled = !n;
+  $('tplreset').hidden = !(n && n === notes[0]);   // "Reset" only restores the original analysis prompt (note 1)
+}
+
+// pick which note Copy selected adds
+$('notesel').addEventListener('change', () => { activeNoteId = $('notesel').value; persistNotes(); });
+
+// editor
 $('tplbtn').addEventListener('click', () => {
   const box = $('tplbox');
   box.hidden = !box.hidden;
   $('tplbtn').classList.toggle('on', !box.hidden);
-  if (!box.hidden) $('tpltext').focus();
+  if (!box.hidden) { if (noteById(activeNoteId)) editNoteId = activeNoteId; renderNotes(); $('tpltext').focus(); }
 });
-$('tplreset').addEventListener('click', async () => {
-  copyTemplate = $('tpltext').value = DEFAULT_TEMPLATE;
-  await chrome.storage.local.set({ copyTemplate });
-  $('tplsaved').textContent = 'Reset to default ✓';
+$('noteedit').addEventListener('change', () => { editNoteId = $('noteedit').value; $('tplsaved').textContent = ''; renderNotes(); });
+let tplTimer;
+const saveSoon = () => {
+  $('tplsaved').textContent = 'Saving…';
+  clearTimeout(tplTimer);
+  tplTimer = setTimeout(() => persistNotes('Saved ✓'), 300);
+};
+$('tpltext').addEventListener('input', () => { const n = noteById(editNoteId); if (n) { n.text = $('tpltext').value; saveSoon(); } });
+$('notename').addEventListener('input', () => {
+  const n = noteById(editNoteId);
+  if (!n) return;
+  n.name = $('notename').value;
+  // keep both dropdowns' labels in sync without re-rendering the field being typed in
+  [...document.querySelectorAll(`#notesel option[value="${n.id}"], #noteedit option[value="${n.id}"]`)].forEach(o => { o.textContent = n.name || 'Untitled note'; });
+  saveSoon();
+});
+$('noteadd').addEventListener('click', () => {
+  const n = { id: newNoteId(), name: `Note ${notes.length + 1}`, text: '' };
+  notes.push(n);
+  editNoteId = n.id;
+  persistNotes('Note added ✓');
+  renderNotes();
+  $('notename').select();
+});
+$('notedel').addEventListener('click', () => {
+  const n = noteById(editNoteId);
+  if (!n || !confirm(`Delete the note “${n.name || 'Untitled note'}”?`)) return;
+  notes = notes.filter(x => x !== n);
+  if (activeNoteId === n.id) activeNoteId = '';
+  editNoteId = notes[0]?.id || '';
+  persistNotes('Deleted ✓');
+  renderNotes();
+});
+$('tplreset').addEventListener('click', () => {
+  const n = noteById(editNoteId);
+  if (!n) return;
+  n.text = DEFAULT_TEMPLATE;
+  persistNotes('Reset to the original prompt ✓');
+  renderNotes();
 });
 
-// Copy all: SEO only. Copy selected: SEO of the ticked pages + the template text.
+// Copy all: SEO only. Copy selected: SEO of the ticked pages + the picked note.
 copyBtn.addEventListener('click', () => copyWithFeedback(copyBtn, () => 'Copy all', formatRows(tabRows())));
 $('copysel').addEventListener('click', () => {
   const seo = formatRows(tabRows().filter(r => selected.has(r.url)));
+  const note = noteById(activeNoteId)?.text || '';
   copyWithFeedback($('copysel'), () => `Copy selected (${tabRows().filter(r => selected.has(r.url)).length})`,
-    copyTemplate.trim() ? seo + '\n\n' + copyTemplate : seo);
+    note.trim() ? seo + '\n\n' + note : seo);
 });
 rerunBtn.addEventListener('click', () => run());
 
@@ -474,8 +538,13 @@ function updateSummary() {
   const stat = (n, label, plural) => `<span class="stat ${n ? 'bad' : ''}">${n ? '' : '✓ '}${n} ${label}${n === 1 || !plural ? '' : 's'}</span>`;
   statusEl.innerHTML = `<span class="stat neutral">${list.length} pages</span>` +
     stat(broken, 'broken link', true) + stat(seoIssues, seoIssues === 1 ? 'page failing SEO' : 'pages failing SEO', false) +
-    stat(contact, 'phone/email issue', true) + (groupByTab(activeTab) ? '' : stat(hdr, 'empty header/footer link', true));
+    stat(contact, 'phone/email issue', true) + (groupByTab(activeTab) ? '' : stat(hdr, 'empty header/footer link', true)) +
+    ($('tog-links').checked ? stat(list.filter(r => !r.probe).reduce((n, r) => n + deadItemsFor(r).items.filter(d => d.state === 'dead').length, 0), 'dead link/button', true) : '') +
+    '<span id="linkprog" class="stat neutral" style="font-weight:500"></span>';
 }
+
+// "Check links" toggle: off by default; checks every link and button on all audited pages.
+$('tog-links').addEventListener('change', () => { if ($('tog-links').checked) runLinkCheck(); else { linkCheckRun++; setLinkProg(''); rerenderCards(); } });
 
 // ---------- dynamic pages: neighborhood and agent detail pages ----------
 // /neighborhoods and /team list these with JavaScript pagination, so the HTML only holds page 1.
@@ -587,6 +656,7 @@ async function auditGroupInner(key) {
   if (token !== g.token || !g.on) return;   // toggled off or re-run meanwhile
   out.sort((a, b) => a.label.localeCompare(b.label));
   g.rows = out;
+  setTimeout(runLinkCheck, 0);   // new pages' links (only when Check links is on)
   g.el.innerHTML = '';
   out.forEach(r => render(r, g.el));
   tabButton(g).textContent = `${g.label} (${out.length})`;
@@ -641,6 +711,7 @@ async function run(opts = {}) {
   resultsEl.innerHTML = '';
   mainBusy = true;
   if (!mainOnly) dynPathsPromise = null;
+  linkStatus.clear();   // links are re-checked live after every audit
   if (!mainOnly) Object.values(dyn).forEach(g => { g.token++; g.rows = []; g.el.innerHTML = g.on ? '<div class="dynstatus">Waiting for the main audit…</div>' : ''; g.toggle.disabled = true; });
   copyBtn.disabled = rerunBtn.disabled = $('selall').disabled = true;
   fillEl.style.width = '0';
@@ -692,6 +763,8 @@ async function run(opts = {}) {
   rows.forEach(r => render(r));
 
   mainBusy = false;
+  renderLinks();
+  runLinkCheck();
   updateSummary();
   updateSelection();
   refreshFind();
@@ -946,7 +1019,7 @@ function runFind() {
     : `Not found on any of the ${list.length} audited pages.`) +
     ` · ${everything ? 'searching everything (alt text, attributes, link URLs, meta tags, loose text)' : 'visible text only (headings, paragraphs, spans, lists, links, buttons)'}`;
 }
-function refreshFind() { if (activeTab === 'search') runFind(); else if (activeTab === 'color') runColor(); }
+function refreshFind() { if (activeTab === 'search') runFind(); else if (activeTab === 'color') runColor(); else if (activeTab === 'spell') renderSpell(); else if (activeTab === 'links') renderLinks(); }
 
 // ---------- tabs: SEO audit / Keyword search ----------
 let activeTab = 'seo';
@@ -957,6 +1030,8 @@ function showTab(name) {
   $('layout').scrollTop = 0;
   if (name === 'search') { $('fq').focus(); runFind(); }
   else if (name === 'color') { $('cq').focus(); runColor(); }
+  else if (name === 'spell') renderSpell();
+  else if (name === 'links') { renderLinks(); updateSummary(); }
   else { updateSummary(); updateSelection(); }   // summary, Select all and copy follow the tab
 }
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
@@ -1310,6 +1385,463 @@ let colorTimer;
   colorTimer = setTimeout(runColor, 200);
 }));
 $('ccopy').addEventListener('click', () => copyWithFeedback($('ccopy'), () => 'Copy report', lastColorReport));
+
+// ---------- Cloudflare email protection ----------
+// LP sites are served through Cloudflare, which replaces every email in the HTML with "[email protected]"
+// (<span class="__cf_email__" data-cfemail="…"> and href="/cdn-cgi/l/email-protection#…") and decodes it with
+// JavaScript in the browser. The audit reads raw HTML, so decode them the same way.
+function cfDecode(hex) {
+  try {
+    const key = parseInt(hex.slice(0, 2), 16);
+    let s = '';
+    for (let i = 2; i < hex.length; i += 2) s += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16) ^ key);
+    return decodeURIComponent(escape(s));
+  } catch { return ''; }
+}
+function decodeCfEmails(doc) {
+  doc.querySelectorAll('[data-cfemail]').forEach(el => {
+    const email = cfDecode(el.getAttribute('data-cfemail'));
+    if (email) el.replaceWith(doc.createTextNode(email));
+  });
+  doc.querySelectorAll('a[href*="/cdn-cgi/l/email-protection"]').forEach(a => {
+    const email = cfDecode(a.getAttribute('href').split('#')[1] || '');
+    if (email) a.setAttribute('href', 'mailto:' + email);
+  });
+}
+
+// ---------- dead links & buttons (optional: "Check links" toggle) ----------
+// Every link and button on each audited page is collected during the audit (cheap); the HTTP checks
+// only run when the toggle is on. Links in the header / side menu / footer / popups are checked once.
+const WIRED_ATTRS = ['data-type', 'data-toggle', 'data-bs-toggle', 'data-target', 'data-bs-target', 'onclick', 'aria-controls',
+  'aria-haspopup', 'aria-expanded', 'data-modal', 'data-href', 'data-url', 'data-action', 'data-dismiss', 'data-bs-dismiss', 'data-slide', 'data-filter', 'data-num'];
+const WIRED_CLASS = /(^|[\s_-])(js|toggle|close|slick|splide|swiper|lp-arrow|arrow|read-more|btn-more|btn-expand|btn-collapse|load-more|pagination|paginationjs|tab|accordion|dropdown|sub-nav|menu|hamburger|play|filter|search|sort|consent|modal|prev|next)([\s_-]|$)/i;
+
+function collectLinkInventory(doc, base, elMap) {
+  const { componentOf, pathOf } = makeLabeler(doc, elMap);
+  const origin = new URL(base).origin;
+  const links = [], dead = [];
+  // A JavaScript-driven control (opens a menu, slider arrow, modal, read more …): not dead even without a URL.
+  const isWired = el => WIRED_ATTRS.some(a => el.hasAttribute(a)) ||
+    [el, el.parentElement].some(e => e && WIRED_CLASS.test(e.className || '')) ||
+    [el, el.parentElement].some(e => e && [...(e.classList || [])].some(c => /^js[A-Z_-]/.test(c))) ||   // jsIGLink, js-btn … filled in by scripts
+    !!el.closest('form, [class*="pagination" i], [class*="logo" i], .slick-slider, .splide, .swiper');
+  const label = el => clean(el.textContent) || clean(el.getAttribute('aria-label')) || clean(el.getAttribute('title')) ||
+    clean(el.querySelector('img[alt]')?.getAttribute('alt')) || '(no text)';
+  doc.querySelectorAll('a, button').forEach(el => {
+    if (el.closest('template, noscript')) return;
+    const base_ = { text: label(el).slice(0, 80), comp: componentOf(el), path: pathOf(el) };
+    if (el.tagName === 'BUTTON') {
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (type === 'submit' || type === 'reset' || isWired(el)) return;
+      dead.push({ ...base_, href: '', why: 'Button with no link or action found', maybe: true });
+      return;
+    }
+    if (!el.hasAttribute('href')) {
+      if (!isWired(el)) dead.push({ ...base_, href: '', why: 'Link has no href', maybe: true });
+      return;
+    }
+    const raw = el.getAttribute('href').trim();
+    if (/^(mailto|tel|sms):/i.test(raw)) return;   // checked by the phone / email check
+    if (!raw || raw === '#' || /^javascript:\s*(void\(0\))?;?\s*$/i.test(raw)) {
+      if (!isWired(el)) dead.push({ ...base_, href: raw || '(empty)', why: 'Empty link (goes nowhere)' });
+      return;
+    }
+    if (raw.startsWith('#')) return;   // jump within the page
+    let u;
+    try { u = new URL(raw, base); } catch { dead.push({ ...base_, href: raw, why: 'Malformed URL' }); return; }
+    if (!/^https?:$/.test(u.protocol)) return;
+    u.hash = '';
+    if (u.origin === origin && /^\/home-search(\/|$)/.test(u.pathname)) return;   // LP Home Search app: behind bot protection, excluded from the audit too
+    links.push({ ...base_, href: u.href, ext: u.origin !== origin });
+  });
+  return { links, dead };
+}
+
+const linkStatus = new Map();   // url → { state: 'pending' | 'ok' | 'dead' | 'warn', code, note }
+let linkCheckRun = 0;
+// progress text inside the summary line (that line is rebuilt often, so the element may not exist yet)
+function setLinkProg(t) { const el = document.getElementById('linkprog'); if (el) el.textContent = t; }
+
+async function checkUrl(url) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  // same-site links use your browser session (like the audit); other sites get an anonymous request
+  const sameSite = siteOrigin && url.startsWith(siteOrigin);
+  const opts = { redirect: 'follow', cache: 'no-store', credentials: sameSite ? 'include' : 'omit', signal: ctl.signal };
+  try {
+    let res = await fetch(url, { ...opts, method: 'HEAD' });
+    if (res.status >= 400) res = await fetch(url, { ...opts, method: 'GET' });   // many servers reject HEAD
+    const c = res.status;
+    if (c < 400) return { state: 'ok', code: c };
+    if (c === 404 || c === 410) return { state: 'dead', code: c, note: 'not found' };
+    // Social networks refuse automated / logged-out requests even for pages that exist:
+    // LinkedIn answers 999, Facebook 400, Instagram / X 403 or 429. Never call those dead.
+    const host = new URL(res.url || url).hostname.replace(/^www\./, '');
+    if (/(^|\.)(linkedin|facebook|fb|instagram|twitter|x|tiktok|pinterest|youtube|threads)\.com$/.test(host) && c !== 404 && c !== 410) {
+      return { state: 'warn', code: c, note: `${host.split('.')[0]} blocks automatic checks (logged-out); open it to confirm` };
+    }
+    if (c >= 500 && c <= 599) return { state: 'dead', code: c, note: 'server error' };
+    // 400, 401, 403, 429, 999 …: bot protection refuses automated requests even for pages that exist
+    return { state: 'warn', code: c, note: c === 999 ? 'request refused (code 999); open it to confirm' : 'the site refused the automatic check, open it to confirm' };
+  } catch (e) {
+    return { state: 'warn', code: 0, note: e.name === 'AbortError' ? 'timed out' : 'could not connect' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Check every not-yet-checked link on all audited pages (main + group tabs), then refresh the cards.
+async function runLinkCheck() {
+  if (!$('tog-links').checked) return;
+  const run = ++linkCheckRun;
+  // pages we already audited answer for themselves
+  allRows().forEach(r => { if (r.status) linkStatus.set(r.url, r.status < 400 ? { state: 'ok', code: r.status } : { state: 'dead', code: r.status, note: r.status === 404 ? 'not found' : 'error' }); });
+  const todo = [...new Set(allRows().flatMap(r => (r.linkInv?.links || []).map(l => l.href)))].filter(u => !linkStatus.has(u));
+  todo.forEach(u => linkStatus.set(u, { state: 'pending' }));
+  rerenderCards();
+  let done = 0, i = 0;
+  const tick = () => { if (!mainBusy) setLinkProg(todo.length ? `Checking links ${done}/${todo.length}…` : ''); };
+  tick();
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    while (i < todo.length && run === linkCheckRun) {
+      const u = todo[i++];
+      linkStatus.set(u, await checkUrl(u));
+      done++;
+      tick();
+      if (done % 15 === 0) rerenderCards();
+    }
+  }));
+  if (run !== linkCheckRun) return;
+  setLinkProg('');
+  rerenderCards();
+}
+
+// Links and buttons of one page with their check result. Page-specific only (wantGlobal = false) or only the
+// shared header / side menu / footer / popup ones (wantGlobal = true). includeOk adds the links that work.
+function deadItemsFor(r, wantGlobal = false, includeOk = false) {
+  const inv = r.linkInv;
+  if (!inv) return { items: [], checked: 0, pending: 0 };
+  const items = [];
+  let checked = 0, pending = 0;
+  for (const d of inv.dead) if (!!d.comp?.global === wantGlobal) items.push({ ...d, state: d.maybe ? 'warn' : 'dead' });
+  for (const l of inv.links) {
+    if (!!l.comp?.global !== wantGlobal) continue;
+    const st = linkStatus.get(l.href);
+    if (!st || st.state === 'pending') { pending++; if (includeOk) items.push({ ...l, state: 'pending', why: 'checking…' }); continue; }
+    checked++;
+    if (st.state !== 'ok') items.push({ ...l, state: st.state, why: `${st.code ? 'HTTP ' + st.code + ' · ' : ''}${st.note || ''}` });
+    else if (includeOk) items.push({ ...l, state: 'ok', why: `HTTP ${st.code}` });
+  }
+  const rank = { dead: 0, warn: 1, pending: 2, ok: 3 };
+  items.sort((a, b) => rank[a.state] - rank[b.state]);
+  return { items, checked, pending };
+}
+
+const LINK_ICON = { dead: '✗', warn: '⚠', ok: '✓', pending: '…' };
+function linkItemHtml(d) {
+  return `<div class="fitem dlitem ${d.state}">${LINK_ICON[d.state]} ${compLabel(d.comp)}<b>${esc(d.text)}</b>` +
+    `${d.href ? ` → <a class="dlhref" href="${esc(d.href)}" target="_blank" title="${esc(d.href)}">${esc(d.href.length > 80 ? d.href.slice(0, 77) + '…' : d.href)}</a>` : ''}` +
+    `${d.ext ? ' <span class="ftpl">external</span>' : ''} <span class="dlwhy">${esc(d.why)}</span>` +
+    `${d.pages ? ` <span class="cpages" title="${esc(d.pages.join('\n'))}">on ${d.pages.length} page${d.pages.length === 1 ? '' : 's'}</span>` : ''}` +
+    `${d.path ? `<div class="fsnip"><code class="fel">${esc(d.path)}</code></div>` : ''}</div>`;
+}
+
+function linkCard(title, sub, url, items, counts, extraClass = '') {
+  const el = document.createElement('div');
+  el.className = 'fhit ' + extraClass;
+  if (url) el.dataset.url = url;
+  const dead = items.filter(d => d.state === 'dead').length, warn = items.filter(d => d.state === 'warn').length;
+  const html = items.map(linkItemHtml);
+  el.innerHTML = `<div class="fh"><b>${esc(title)}</b> <span class="fpath">${esc(sub)}</span>` +
+    `${dead ? `<span class="ftag seo-bad">${dead} dead</span>` : ''}${warn ? `<span class="ftag lwarn">${warn} to check</span>` : ''}` +
+    `<span class="ftag body">${counts.checked} checked${counts.pending ? ` · ${counts.pending} pending` : ''}</span></div>
+    ${html.slice(0, 12).join('')}
+    ${html.length > 12 ? `<div class="fmore" hidden>${html.slice(12).join('')}</div>
+      <button class="fmore-btn" data-more="${html.length - 12}">Show all ${html.length} (+${html.length - 12} more)</button>` : ''}`;
+  return el;
+}
+
+// ---------- Links tab ----------
+let lastLinkReport = '';
+function renderLinks() {
+  if (activeTab !== 'links') return;
+  const res = $('lres'), sum = $('lsum');
+  res.innerHTML = '';
+  lastLinkReport = '';
+  $('lcopy').disabled = true;
+  if (!rows.length) { sum.textContent = 'Run the audit first.'; return; }
+  if (!$('tog-links').checked) {
+    sum.innerHTML = 'Turn on <b>Check links</b> to test every link and button on all audited pages (including Neighborhoods / Agents when those tabs are on).';
+    return;
+  }
+  const showAll = $('lfilter').value === 'all';
+  const report = [];
+  const line = d => `  - [${d.state === 'dead' ? 'DEAD' : d.state === 'warn' ? 'CHECK' : d.state.toUpperCase()}] ${d.comp?.name ? d.comp.name + ' › ' : ''}"${d.text}"${d.href ? ' → ' + d.href : ''} — ${d.why}`;
+  let dead = 0, warn = 0, checked = 0, pending = 0, pagesWithProblems = 0;
+
+  // shared header / side menu / footer / popups: checked once
+  const shared = new Map();
+  let sc = { checked: 0, pending: 0 };
+  for (const r of allRows()) {
+    const d = deadItemsFor(r, true, showAll);
+    for (const it of d.items) {
+      const k = [it.comp?.name, it.text, it.href, it.why].join('\u0001');
+      const e = shared.get(k) || { ...it, pages: [] };
+      e.pages.push(new URL(r.url).pathname || '/');
+      shared.set(k, e);
+    }
+  }
+  const sharedItems = [...shared.values()];
+  const sharedLinks = new Set(allRows().flatMap(r => (r.linkInv?.links || []).filter(l => l.comp?.global).map(l => l.href)));
+  sharedLinks.forEach(u => { const st = linkStatus.get(u); if (!st || st.state === 'pending') sc.pending++; else sc.checked++; });
+  const sharedProblems = sharedItems.filter(d => d.state === 'dead' || d.state === 'warn');
+  dead += sharedProblems.filter(d => d.state === 'dead').length;
+  warn += sharedProblems.filter(d => d.state === 'warn').length;
+  checked += sc.checked; pending += sc.pending;
+  if (sharedItems.length || showAll) {
+    res.appendChild(linkCard('Site-wide links', 'header · side menu · footer · popups', null, sharedItems, sc, sharedProblems.length ? 'broken-links shared' : 'shared'));
+  }
+  if (sharedProblems.length) report.push('Site-wide (header, side menu, footer, popups)', ...sharedProblems.map(line));
+
+  // every audited page: main pages, then the Neighborhood / Agent tabs that are on
+  const groups = [['', rows.filter(r => !r.probe)], ...Object.entries(dyn).filter(([, g]) => g.on).map(([k, g]) => [k, g.rows])];
+  for (const [gname, list] of groups) {
+    let headerAdded = false;
+    for (const r of list) {
+      const d = deadItemsFor(r, false, showAll);
+      checked += d.checked; pending += d.pending;
+      const problems = d.items.filter(x => x.state === 'dead' || x.state === 'warn');
+      dead += problems.filter(x => x.state === 'dead').length;
+      warn += problems.filter(x => x.state === 'warn').length;
+      if (!d.items.length && !(showAll && r.linkInv)) continue;
+      if (gname && !headerAdded) {
+        const h = document.createElement('div');
+        h.className = 'grouph';
+        h.textContent = `${gname} pages`;
+        res.appendChild(h);
+        headerAdded = true;
+      }
+      if (problems.length) pagesWithProblems++;
+      res.appendChild(linkCard(r.label, new URL(r.url).pathname || '/', r.url, d.items, d, problems.length ? 'broken-links' : ''));
+      if (problems.length) report.push(`\n${r.label} (${r.url})`, ...problems.map(line));
+    }
+  }
+
+  sum.innerHTML = (pending ? `Checking… ${checked} done, ${pending} to go · ` : '') +
+    (dead || warn
+      ? `<b>${dead}</b> dead · <b>${warn}</b> to check by hand · ${pagesWithProblems} page${pagesWithProblems === 1 ? '' : 's'} affected${sharedProblems.length ? ' + site-wide' : ''} · ${checked} links checked`
+      : pending ? '' : `✓ No dead links or buttons · ${checked} links checked`);
+  if (!res.children.length && !pending) res.innerHTML = '<div class="dynstatus">Nothing to show. Choose “All links” to list every link that was checked.</div>';
+  if (report.length) { lastLinkReport = `Dead links & buttons — ${dead} dead, ${warn} to check by hand\n${report.join('\n')}`; $('lcopy').disabled = false; }
+}
+
+$('lfilter').addEventListener('change', renderLinks);
+$('lcopy').addEventListener('click', () => copyWithFeedback($('lcopy'), () => 'Copy report', lastLinkReport));
+$('lres').addEventListener('click', resultsClick);
+
+// After link checks progress: refresh the Links tab and the summary line.
+function rerenderCards() {
+  renderLinks();
+  updateSummary();
+}
+
+
+// ================= spelling check =================
+// Same text as Keyword search (visible text + SEO title/description, same element labels, testimonials skipped).
+// Spelling comes from LanguageTool's free public API (spelling rules only). Free limits: about 20 requests and
+// 75 KB of text per minute, so text is de-duplicated across pages and sent in throttled batches.
+const LT_URL = 'https://api.languagetool.org/v2/check';
+const spellCache = new Map();   // `${lang}\u0001${text}` → [{ offset, length, word, sugs }]
+let spellIgnore = new Set();
+chrome.storage.local.get('spellIgnore').then(s => { spellIgnore = new Set(s.spellIgnore || []); updateIgnoreCount(); });
+function updateIgnoreCount() { $('signored').textContent = `Ignored words (${spellIgnore.size})`; $('signored').disabled = !spellIgnore.size; }
+const persistIgnore = () => { chrome.storage.local.set({ spellIgnore: [...spellIgnore] }); updateIgnoreCount(); };
+
+// All text pieces to check, grouped like keyword search.
+function spellPieces() {
+  const out = [];
+  for (const r of allRows().filter(r => !r.probe)) {
+    out.push({ r, where: 'title', text: r.title, path: 'head › title', comp: null, seo: true });
+    out.push({ r, where: 'description', text: r.description, path: 'head › meta[name="description"]', comp: null, seo: true });
+    for (const [where, text, path, comp] of (r.visibleParts || [])) out.push({ r, where, text, path, comp });
+  }
+  return out.filter(p => p.text && /[a-z]{3}/i.test(p.text));
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let ltWindow = [];   // [time, bytes] of recent requests, for the free-tier limits
+
+async function ltCheckBatch(texts, lang) {
+  // join unique texts with a blank line; remember where each one starts
+  const SEP = '\n\n';
+  let body = '', starts = [];
+  for (const t of texts) { starts.push(body.length); body += t + SEP; }
+  const bytes = new Blob([body]).size;
+  // stay under ~18 requests and ~70 KB per rolling minute
+  for (;;) {
+    const now = Date.now();
+    ltWindow = ltWindow.filter(([t]) => now - t < 60000);
+    const used = ltWindow.reduce((s, [, b]) => s + b, 0);
+    if (ltWindow.length < 18 && used + bytes <= 70000) break;
+    $('ssum').textContent = 'Waiting for the free spelling-check limit (resets every minute)…';
+    await sleep(3000);
+  }
+  ltWindow.push([Date.now(), bytes]);
+  const form = new URLSearchParams({ text: body, language: lang, enabledOnly: 'true', enabledCategories: 'TYPOS' });
+  const res = await fetch(LT_URL, { method: 'POST', body: form });
+  if (res.status === 429) { await sleep(20000); return ltCheckBatch(texts, lang); }
+  if (!res.ok) throw new Error('LanguageTool HTTP ' + res.status);
+  const data = await res.json();
+  const perText = texts.map(() => []);
+  for (const m of data.matches || []) {
+    if (m.rule?.issueType && m.rule.issueType !== 'misspelling') continue;
+    let k = starts.length - 1;
+    while (k > 0 && starts[k] > m.offset) k--;
+    const off = m.offset - starts[k];
+    perText[k].push({ offset: off, length: m.length, word: texts[k].substr(off, m.length), sugs: (m.replacements || []).slice(0, 3).map(x => x.value) });
+  }
+  texts.forEach((t, k) => spellCache.set(`${lang}\u0001${t}`, perText[k]));
+}
+
+let spellRunning = false;
+async function runSpellCheck() {
+  if (spellRunning) return;
+  const lang = $('slang').value;
+  const texts = [...new Set(spellPieces().map(p => p.text))].filter(t => !spellCache.has(`${lang}\u0001${t}`));
+  if (!allRows().length) { $('ssum').textContent = 'Run the audit first — nothing to check yet.'; return; }
+  spellRunning = true;
+  $('scheck').disabled = true;
+  try {
+    // batches of up to ~15 KB
+    const batches = [];
+    let cur = [], size = 0;
+    for (const t of texts) {
+      if (size + t.length > 15000 && cur.length) { batches.push(cur); cur = []; size = 0; }
+      cur.push(t); size += t.length + 2;
+    }
+    if (cur.length) batches.push(cur);
+    for (let b = 0; b < batches.length; b++) {
+      $('ssum').textContent = `Checking spelling… batch ${b + 1} of ${batches.length} (text is sent to LanguageTool)`;
+      await ltCheckBatch(batches[b], lang);
+      if (activeTab === 'spell') renderSpell();
+    }
+  } catch (e) {
+    $('ssum').textContent = 'Spelling check failed: ' + e.message + '. Try again in a minute.';
+    return;
+  } finally {
+    spellRunning = false;
+    $('scheck').disabled = false;
+  }
+  renderSpell();
+}
+
+// A flagged word we should skip: ignored, names/places (capitalised), acronyms, emails, URLs, words with digits.
+function skipWord(word, text, offset) {
+  const w = word.trim();
+  if (!w || spellIgnore.has(w.toLowerCase())) return true;
+  if (/\d|@|\.\w|^www/i.test(w) || /^[A-Z0-9&]{2,}$/.test(w)) return true;
+  if ($('scaps').checked && /^[A-Z]/.test(w)) {
+    // keep capitalised words only at the start of a sentence, where a capital says nothing about being a name
+    const before = text.slice(0, offset).trimEnd();
+    if (before && !/[.!?:]$/.test(before)) return true;
+  }
+  return false;
+}
+
+function spellSnippet(text, m) {
+  const a = Math.max(0, m.offset - 50), b = Math.min(text.length, m.offset + m.length + 50);
+  return (a ? '…' : '') + esc(text.slice(a, m.offset)) + `<mark class="miss">${esc(text.substr(m.offset, m.length))}</mark>` + esc(text.slice(m.offset + m.length, b)) + (b < text.length ? '…' : '');
+}
+
+function spellHitHtml(h) {
+  const sugg = h.m.sugs.length ? ` <span class="ssug">→ ${h.m.sugs.map(s => `<b>${esc(s)}</b>`).join(', ')}</span>` : '';
+  const pages = h.pages ? ` <span class="cpages" title="${esc(h.pages.join('\n'))}">same on ${h.pages.length} page${h.pages.length === 1 ? '' : 's'}</span>` : '';
+  return `<div class="fitem">${compLabel(h.comp)}<span class="fwhere">${esc(h.where)}</span>${h.path ? ` in <code class="fel" title="${esc(h.path)}">${esc(h.path)}</code>` : ''}${pages}` +
+    ` <button class="signore" data-word="${esc(h.m.word.toLowerCase())}" title="Not a mistake: ignore this word everywhere">Ignore “${esc(h.m.word)}”</button>${sugg}` +
+    `<div class="fsnip">${spellSnippet(h.text, h.m)}</div></div>`;
+}
+
+function spellCard(title, sub, url, hits, extraClass = '') {
+  const el = document.createElement('div');
+  el.className = 'fhit ' + extraClass;
+  if (url) el.dataset.url = url;
+  const words = [...new Set(hits.map(h => h.m.word))];
+  const html = hits.map(spellHitHtml);
+  el.innerHTML = `<div class="fh"><b>${esc(title)}</b> <span class="fpath">${esc(sub)}</span> ${words.slice(0, 8).map(w => `<span class="ftag seo-bad">${esc(w)}</span>`).join('')}${words.length > 8 ? `<span class="ftag body">+${words.length - 8}</span>` : ''}</div>
+    ${html.slice(0, MAX_HITS_SHOWN).join('')}
+    ${html.length > MAX_HITS_SHOWN ? `<div class="fmore" hidden>${html.slice(MAX_HITS_SHOWN).join('')}</div>
+      <button class="fmore-btn" data-more="${html.length - MAX_HITS_SHOWN}">Show all ${html.length} (+${html.length - MAX_HITS_SHOWN} more)</button>` : ''}`;
+  return el;
+}
+
+let lastSpellReport = '';
+function renderSpell() {
+  const res = $('sres'), sum = $('ssum');
+  const lang = $('slang').value;
+  res.innerHTML = '';
+  lastSpellReport = '';
+  $('scopy').disabled = true;
+  const pieces = spellPieces();
+  if (!pieces.length) { sum.textContent = 'Run the audit first — nothing to check yet.'; return; }
+  const unchecked = pieces.filter(p => !spellCache.has(`${lang}\u0001${p.text}`)).length;
+  const shared = new Map();
+  const byPage = new Map();
+  for (const p of pieces) {
+    const ms = spellCache.get(`${lang}\u0001${p.text}`);
+    if (!ms) continue;
+    for (const m of ms) {
+      if (skipWord(m.word, p.text, m.offset)) continue;
+      const h = { ...p, m };
+      if (p.comp?.global) {
+        const key = [p.comp.name, p.where, p.path, p.text, m.offset].join('\u0001');
+        const s = shared.get(key) || { ...h, pages: [] };
+        s.pages.push(new URL(p.r.url).pathname || '/');
+        shared.set(key, s);
+      } else {
+        (byPage.get(p.r) || byPage.set(p.r, []).get(p.r)).push(h);
+      }
+    }
+  }
+  const report = [];
+  const line = h => `  - "${h.m.word}"${h.m.sugs.length ? ' → ' + h.m.sugs.join(' / ') : ''}  (${h.comp ? h.comp.name + ' › ' : ''}${h.where}${h.seo ? ' [SEO]' : ''})`;
+  const sharedHits = [...shared.values()];
+  if (sharedHits.length) {
+    res.appendChild(spellCard('Site-wide (same on every page)', 'header · side menu · footer · popups', null, sharedHits, 'shared'));
+    report.push('Site-wide', ...sharedHits.map(line));
+  }
+  let total = sharedHits.length, pagesWith = 0;
+  for (const [r, hits] of byPage) {
+    hits.sort((a, b) => (b.seo ? 1 : 0) - (a.seo ? 1 : 0));
+    pagesWith++;
+    total += hits.length;
+    res.appendChild(spellCard(r.label, new URL(r.url).pathname || '/', r.url, hits));
+    report.push(`\n${r.label} (${r.url})`, ...hits.map(line));
+  }
+  const words = new Set([...sharedHits, ...[...byPage.values()].flat()].map(h => h.m.word.toLowerCase())).size;
+  sum.innerHTML = (total
+    ? `<b>${words}</b> possible misspelling${words === 1 ? '' : 's'} in ${total} place${total === 1 ? '' : 's'}: ${sharedHits.length} site-wide · ${pagesWith} page${pagesWith === 1 ? '' : 's'}`
+    : unchecked === pieces.length ? 'Press <b>Check spelling</b> to check every audited page.' : '✓ No spelling mistakes found.') +
+    (unchecked && unchecked < pieces.length ? ` · ${unchecked} text pieces not checked yet` : '');
+  if (total) { lastSpellReport = `Spelling (${lang})\n${report.join('\n')}`; $('scopy').disabled = false; }
+}
+
+$('scheck').addEventListener('click', runSpellCheck);
+$('slang').addEventListener('change', renderSpell);
+$('scaps').addEventListener('change', renderSpell);
+$('scopy').addEventListener('click', () => copyWithFeedback($('scopy'), () => 'Copy report', lastSpellReport));
+$('sres').addEventListener('click', e => {
+  const ig = e.target.closest('.signore');
+  if (ig) { spellIgnore.add(ig.dataset.word); persistIgnore(); renderSpell(); return; }
+  resultsClick(e);
+});
+$('signored').addEventListener('click', () => {
+  const list = [...spellIgnore].sort();
+  const keep = prompt('Ignored words (comma-separated). Remove a word to check it again:', list.join(', '));
+  if (keep === null) return;
+  spellIgnore = new Set(keep.split(',').map(w => w.trim().toLowerCase()).filter(Boolean));
+  persistIgnore();
+  renderSpell();
+});
 
 // ---------- random SFW anime image ----------
 const DANBOORU = 'https://danbooru.donmai.us';

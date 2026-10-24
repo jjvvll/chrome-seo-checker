@@ -187,6 +187,46 @@
   .fmore-btn { margin-top: 10px; height: 28px; font-size: 12px; }
   mark { background: #fef0c7; color: #7a2e0e; border-radius: 3px; padding: 0 2px; }
 
+  /* notes */
+  .noterow { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  #noteedit { flex: 0 1 180px; min-width: 0; }
+  #notename { flex: 1 1 140px; min-width: 0; height: 30px; padding: 0 9px; border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--card); color: var(--text); font: inherit; font-size: 12.5px; }
+  #notesel { max-width: 150px; }
+  #noteadd, #notedel, #tplreset { height: 30px; font-size: 12px; }
+
+  /* dead links & buttons */
+  #linkprog:empty { display: none; }
+  #lfinder { padding: 12px 0; border-top: 1px solid var(--line); }
+  #lfinder[hidden] { display: none; }
+  #lfinder .frow .grow { flex: 1; }
+  #lsum { margin-top: 10px; font-size: 12px; color: var(--muted); min-height: 16px; }
+  #lsum b { color: var(--text); }
+  .fhit.broken-links { box-shadow: inset 3px 0 0 var(--bad-solid), var(--shadow-sm); }
+  .ftag.lwarn { background: #fffaeb; color: #b54708; border: 1px solid #fedf89; }
+  .dlitem.ok { color: var(--ok); }
+  .dlitem.pending { color: var(--muted); }
+  .linkblock { margin: 6px 0 8px; padding: 8px 10px; border-radius: var(--r); background: var(--sunken); border: 1px solid var(--line); font-size: 12px; }
+  .linkblock.bad { background: var(--bad-soft); border-color: var(--bad-line); }
+  .lbhead { font-weight: 600; color: var(--text-2); }
+  .linkblock.bad .lbhead { color: var(--bad); }
+  .dlitem { margin-top: 6px; color: var(--text-2); line-height: 1.5; word-break: break-word; }
+  .dlitem.dead { color: var(--bad); }
+  .dlitem.warn { color: #b54708; }
+  .dlhref { color: inherit; font: 11.5px var(--mono); }
+  .dlwhy { font-weight: 600; }
+
+  /* spelling */
+  #sfinder { padding: 12px 0; border-top: 1px solid var(--line); }
+  #sfinder[hidden] { display: none; }
+  #sfinder .frow .grow { flex: 1; }
+  #ssum { margin-top: 10px; font-size: 12px; color: var(--muted); min-height: 16px; }
+  #ssum b { color: var(--text); }
+  mark.miss { background: transparent; color: var(--bad); text-decoration: underline wavy var(--bad-solid); text-underline-offset: 3px; font-weight: 600; padding: 0; }
+  .ftag.seo-bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad-line); text-transform: none; }
+  .ssug { font-size: 12px; color: var(--muted); }
+  .ssug b { color: var(--ok); }
+  .signore { height: 22px; padding: 0 8px; font-size: 11px; font-weight: 500; box-shadow: none; margin-left: 4px; }
+
   /* colour search */
   #cfinder { padding: 12px 0; border-top: 1px solid var(--line); }
   #cfinder[hidden] { display: none; }
@@ -335,8 +375,10 @@
         <button class="tab on" data-tab="seo" role="tab">SEO audit</button>
         <button class="tab" data-tab="nbh" role="tab" hidden>Neighborhoods</button>
         <button class="tab" data-tab="agent" role="tab" hidden>Agents</button>
+        <button class="tab" data-tab="links" role="tab">Links</button>
         <button class="tab" data-tab="search" role="tab">Keyword search</button>
         <button class="tab" data-tab="color" role="tab">Color search</button>
+        <button class="tab" data-tab="spell" role="tab">Spelling</button>
       </div>
       <div class="toolbar" data-pane="seo nbh agent">
         <label><input type="checkbox" id="selall" disabled> Select all</label>
@@ -349,12 +391,20 @@
           <option value="title">Titles only</option>
           <option value="desc">Descriptions only</option>
         </select>
-        <button id="copysel" disabled title="Copies the ticked pages, then your template text">Copy selected (0)</button>
-        <button id="tplbtn" class="icon" title="Edit the text added after Copy selected"><svg class="ico"><use href="#i-edit"/></svg></button>
+        <button id="copysel" disabled title="Copies the ticked pages, then the picked note">Copy selected (0)</button>
+        <select id="notesel" title="Note added after the copied SEO (Copy selected)"><option value="">No note</option></select>
+        <button id="tplbtn" class="icon" title="Edit your notes (text added after Copy selected)"><svg class="ico"><use href="#i-edit"/></svg></button>
         <div id="tplbox" hidden>
-          <div class="tplhead"><b>Text added after “Copy selected”</b><span id="tplsaved"></span><button id="tplreset" title="Restore the original analysis prompt">Reset</button></div>
-          <textarea id="tpltext" rows="4" spellcheck="true" placeholder="Leave empty to copy only the SEO"></textarea>
-          <div class="tplhint">Saved automatically and kept until you change it. Copy all copies only the SEO.</div>
+          <div class="tplhead"><b>Notes added after “Copy selected”</b><span id="tplsaved"></span></div>
+          <div class="noterow">
+            <select id="noteedit" title="Note to edit"></select>
+            <input id="notename" placeholder="Note name" autocomplete="off">
+            <button id="noteadd" title="Add a new note"><svg class="ico"><use href="#i-plus"/></svg>New note</button>
+            <button id="notedel" title="Delete this note">Delete</button>
+            <button id="tplreset" title="Restore the original analysis prompt">Reset</button>
+          </div>
+          <textarea id="tpltext" rows="4" spellcheck="true" placeholder="Text added after the copied SEO"></textarea>
+          <div class="tplhint">Pick which note is added with the menu next to Copy selected. Saved automatically. Copy all copies only the SEO.</div>
         </div>
       </div>
       <div id="finder" data-pane="search" hidden>
@@ -370,6 +420,36 @@
           <label title="Also search things that are not visible text: image alt text, title/aria attributes, placeholders, link URLs, meta tags, and loose text outside text elements"><input type="checkbox" id="fall"> Include hidden text</label>
         </div>
         <div id="fsum"></div>
+      </div>
+      <div id="lfinder" data-pane="links" hidden>
+        <div class="frow">
+          <label title="Check every link and button on all audited pages (404s, server errors, empty links). Off by default: it makes many requests. Re-checked after every audit while on."><input type="checkbox" id="tog-links"> Check links</label>
+          <select id="lfilter" title="What to list">
+            <option value="problems">Problems only</option>
+            <option value="all">All links</option>
+          </select>
+          <span class="grow"></span>
+          <button id="lcopy" disabled>Copy report</button>
+        </div>
+        <div id="lsum"></div>
+        <div class="tplhint">Dead = not found (404) or server error, or a link that goes nowhere. “Check by hand” = the site refused the automatic check (social networks often do) or a button with no link or action.</div>
+      </div>
+      <div id="sfinder" data-pane="spell" hidden>
+        <div class="frow">
+          <select id="slang" title="Spelling language">
+            <option value="en-US">English (US)</option>
+            <option value="en-GB">English (UK)</option>
+            <option value="en-CA">English (Canada)</option>
+            <option value="en-AU">English (Australia)</option>
+          </select>
+          <label title="Skip capitalised words in the middle of a sentence: names of people, places, brands"><input type="checkbox" id="scaps" checked> Skip names (capitalised words)</label>
+          <span class="grow"></span>
+          <button id="signored" disabled title="See or edit the words you told it to ignore">Ignored words (0)</button>
+          <button id="scopy" disabled>Copy report</button>
+          <button id="scheck" class="primary" title="Check the visible text and SEO titles/descriptions of every audited page">Check spelling</button>
+        </div>
+        <div id="ssum"></div>
+        <div class="tplhint">Checks the same text as Keyword search. The text is sent to LanguageTool (languagetool.org), a free spelling service.</div>
       </div>
       <div id="cfinder" data-pane="color" hidden>
         <div class="frow">
@@ -399,6 +479,8 @@
       <div id="res-agent" data-pane="agent" hidden></div>
       <div id="fres" data-pane="search" hidden></div>
       <div id="cres" data-pane="color" hidden></div>
+      <div id="sres" data-pane="spell" hidden></div>
+      <div id="lres" data-pane="links" hidden></div>
     </div>
   </main>
   <aside id="pic">
